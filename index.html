@@ -1,252 +1,75 @@
-<!DOCTYPE html>
-<html lang="ja">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>PDF → Excel（昇順＋Raw固定・数値強化版）</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" defer></script>
-<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" defer></script>
-<style>
-  body{ font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans JP",Meiryo,sans-serif; background:#f6fbf9; margin:0; }
-  header{ padding:14px 18px; border-bottom:1px solid #dde7e3; background:#fff; }
-  h1{ margin:0; font-size:16px; }
-  main{ max-width:900px; margin:0 auto; padding:16px; }
-  .drop{ border:2px dashed #9dd8c9; border-radius:12px; background:#fff; padding:28px; text-align:center; cursor:pointer; }
-  .drop.drag{ background:#f0faf7; border-color:#0a6; }
-  .row{ margin:14px 0; display:flex; align-items:center; gap:12px; }
-  .btn{ background:#0a6; color:#fff; border:0; padding:10px 14px; border-radius:8px; font-weight:700; cursor:pointer; }
-  .btn:disabled{ background:#9acfbf; cursor:not-allowed; }
-  .hint{ font-size:12px; opacity:.8; }
-  .tbl-wrap{ overflow:auto; max-height:420px; border:1px solid #dde7e3; border-radius:8px; background:#fff; }
-  table{ width:100%; border-collapse:collapse; }
-  th,td{ padding:6px 8px; border-bottom:1px solid #eef4f1; }
-  thead th{ background:#f5fbf9; position:sticky; top:0; }
-  .right{ text-align:right; }
-  input[type=text],input[type=number]{ width:100%; border:1px solid #dde7e3; border-radius:6px; padding:4px 6px; }
-</style>
-</head>
-<body>
-<header><h1>PDF → Excel（昇順＋Raw固定・数値強化版）</h1></header>
-<main>
-  <div id="drop" class="drop">ここに PDF をドロップ<br><span class="hint">クリックでも選択可</span></div>
-  <input id="pdfInput" type="file" accept="application/pdf" style="display:none;">
-  <div class="row">
-    <button id="exportBtn" class="btn" disabled>Excel出力</button>
-    <span id="status" class="hint">PDFを選択してください</span>
-  </div>
-
-  <div class="tbl-wrap">
-    <table>
-      <thead><tr>
-        <th>品名</th><th>型式</th><th class="right">数量</th><th>単位</th><th class="right">単価</th><th class="right">金額</th>
-      </tr></thead>
-      <tbody id="tbody"></tbody>
-    </table>
-  </div>
-</main>
-
-<script>
-const drop=document.getElementById('drop'), pdfInput=document.getElementById('pdfInput');
-const exportBtn=document.getElementById('exportBtn'), statusEl=document.getElementById('status');
-const tbody=document.getElementById('tbody');
-let currentFile=null, lastLines=[];
-
-// D&D
-['dragenter','dragover'].forEach(ev=> drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('drag');}));
-['dragleave','drop'].forEach(ev=> drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('drag');}));
-drop.addEventListener('drop',e=>{
-  e.preventDefault();
-  const f=[...e.dataTransfer.files].find(f=>/\.pdf$/i.test(f.name));
-  if(f) handleFile(f);
-});
-drop.addEventListener('click',()=> pdfInput.click());
-pdfInput.addEventListener('change',()=>{
-  if(pdfInput.files[0]) handleFile(pdfInput.files[0]);
-});
-
-// ---- 文字列の正規化ユーティリティ ----
-function toHalfWidth(str){
-  return str.replace(/[！-～]/g, ch => String.fromCharCode(ch.charCodeAt(0)-0xFEE0)).replace(/　/g,' ');
-}
-function normalizeNumberGaps(s){
-  s = s.replace(/\s+/g,' ').trim();
-  // "1 , 234" → "1,234" を複数回適用
-  for(let i=0;i<4;i++){
-    s = s.replace(/(\d)\s*,\s*(\d{3})(?!\d)/g, '$1,$2');
-  }
-  // "¥ 12 , 300" → "¥12,300"
-  s = s.replace(/([¥￥])\s+/g, '$1');
-  return s;
-}
-function normLine(s){ return normalizeNumberGaps(toHalfWidth(s)); }
-
-function toInt(s){
-  if(!s) return 0;
-  s = normLine(String(s)).replace(/[¥￥,\s]/g,'');
-  const n = Number(s);
-  return isNaN(n) ? 0 : n;
-}
-function parseQtyToken(tok){
-  const m = normLine(String(tok||'')).match(/^(\d+)\s*(式|個|台)?$/);
-  if(m) return {qty:Number(m[1]), qUnit:m[2]||""};
-  // 「３ 台」なども拾う
-  const n = toInt(tok);
-  return {qty: n||0, qUnit:""};
-}
-
-// ---- PDF処理 ----
-async function handleFile(f){
-  currentFile=f;
-  statusEl.textContent=`読み込み中: ${f.name}`;
-  exportBtn.disabled=false;           // 先に押せるようにする
-  tbody.innerHTML='';
-  ensureAtLeastOneRow();
-
-  try{
-    const buf=await f.arrayBuffer();
-    pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-    const pdf=await pdfjsLib.getDocument({data:buf}).promise;
-
-    let lines=[];
-    for(let p=1;p<=pdf.numPages;p++){
-      const page=await pdf.getPage(p);
-      const c=await page.getTextContent();
-      lines=lines.concat(rebuildLines(c.items));
-    }
-    lastLines=lines.slice();
-
-    const items=parseItems(lines);
-    items.sort((a,b)=>a.idx-b.idx); // 昇順固定
-
-    if(items.length>0){
-      tbody.innerHTML='';
-      items.forEach(addRow);
-      statusEl.textContent=`解析完了: ${items.length} 行`;
-    }else{
-      statusEl.textContent="解析結果0行：空行を1行用意しました（手入力→Excel出力できます）";
-    }
-  }catch(err){
-    console.error(err);
-    statusEl.textContent="解析失敗: "+(err.message||err);
-  }finally{
-    exportBtn.disabled=false;
-    ensureAtLeastOneRow();
-  }
-}
-
-function ensureAtLeastOneRow(){
-  if(!tbody.querySelector('tr')) addRow({name:"",model:"",qty:0,qUnit:"",unit:0,amount:0});
-}
-
-function rebuildLines(items){
-  // yで行にまとめ → xで並べ → 結合後に数値の分断を修復
-  const tol=2, pts=items.map(it=>({x:it.transform[4],y:it.transform[5],s: toHalfWidth(it.str)}));
-  pts.sort((a,b)=> (Math.abs(b.y-a.y)>tol?b.y-a.y:a.x-b.x));
-  let curY=null,buf=[],rows=[];
-  for(const p of pts){
-    if(curY===null||Math.abs(p.y-curY)<=tol){curY=curY??p.y;buf.push(p);}
-    else{
-      buf.sort((a,b)=>a.x-b.x);
-      const joined = buf.map(x=>x.s).join(' ').replace(/\s{2,}/g,' ').trim();
-      rows.push(normalizeNumberGaps(joined));
-      curY=p.y;buf=[p];
-    }
-  }
-  if(buf.length){
-    buf.sort((a,b)=>a.x-b.x);
-    const joined = buf.map(x=>x.s).join(' ').replace(/\s{2,}/g,' ').trim();
-    rows.push(normalizeNumberGaps(joined));
-  }
-  rows.reverse(); 
-  return rows.filter(Boolean);
-}
-
-function addRow(it){
-  const tr=document.createElement('tr');
-  tr.innerHTML=`<td><input type="text" value="${it.name||''}"></td>
-    <td><input type="text" value="${it.model||''}"></td>
-    <td class="right"><input type="number" value="${it.qty||0}"></td>
-    <td><input type="text" value="${it.qUnit||''}"></td>
-    <td class="right"><input type="number" value="${it.unit||0}"></td>
-    <td class="right"><input type="number" value="${it.amount||0}"></td>`;
-  tbody.appendChild(tr);
-}
-function tableToAoa(){return [...tbody.querySelectorAll('tr')].map(tr=>{
-  const t=tr.querySelectorAll('td input');
-  return [t[0].value,t[1].value,Number(t[2].value)||0,t[3].value,Number(t[4].value)||0,Number(t[5].value)||0];
-});}
-
-// ---- 解析ロジック（数値強化）----
-function splitNameModel(desc){
-  const s = normLine(desc||"");
-  const toks = s.split(' ');
-  const looksModel = (t)=> /[A-Za-z]/.test(t) && /[0-9A-Za-z\-]/.test(t);
-  if(toks.length>=2 && looksModel(toks[toks.length-1])) return [toks.slice(0,-1).join(' '), toks[toks.length-1]];
-  const m = s.match(/^([A-Za-z0-9][A-Za-z0-9\-]+)\s*(.+)$/);
-  if(m) return [m[2], m[1]];
-  return [s,""];
-}
-function pickPricesFromLine(s){
-  // 行の中から右側（末尾）に近い数値を2つまで拾う
-  const nums = [];
-  const re = /[¥￥]?\s*\d{1,3}(?:,\d{3})*(?:\.\d+)?/g;
-  let m;
-  while((m=re.exec(s))){ nums.push(toInt(m[0])); }
-  const filtered = nums.filter(n=> n>0);
-  if(filtered.length>=2) return {unit: filtered[filtered.length-2], amount: filtered[filtered.length-1]};
-  if(filtered.length===1) return {unit: filtered[0], amount: filtered[0]};
-  return {unit:0, amount:0};
-}
-
 function parseItems(lines){
-  const items=[];
-  const numLine = /^(\d+)\s+(\d+(?:\s*(?:式|個|台))?)\b.*$/; // 後続は柔らかく、価格は行全体から拾う
-  const lump    = /^(\d+)\s+([¥￥]?\s*\d{1,3}(?:,\d{3})*(?:\.\d+)?)[\s　]+(.+)$/;
+  // 正規化して配列に格納（行番号も持つ）
+  const rows = lines.map((raw, i) => {
+    const s = normLine(raw || "");
+    return { i, s };
+  });
 
+  // パターン
+  const numLine = /^(\d+)\s+(\d+(?:\s*(?:式|個|台))?)\b.*$/; // 数値行（No 数量 ...）
+  // 金額と説明の間に空白が無くてもOKにする（例: "9 5,000梱包・運搬費"）
+  const lump = /^(\d+)\s*([¥￥]?\s*\d{1,3}(?:,\d{3})*(?:\.\d+)?)(.*)$/;
   const skip = /^(合\s*計|項目|品名|御\s*見\s*積|納\s*期|有\s*効|支\s*払)/;
 
-  for(let i=0;i<lines.length;i++){
-    const ln = normLine(lines[i]);
-    let m;
+  // 行の種類を仕分け
+  const kinds = rows.map(r => {
+    if (numLine.test(r.s)) return { ...r, kind: 'num' };
+    if (lump.test(r.s))   return { ...r, kind: 'lump' };
+    if (skip.test(r.s))   return { ...r, kind: 'skip' };
+    return { ...r, kind: 'desc' }; // 説明候補
+  });
 
-    if((m=ln.match(numLine))){
-      const idx = Number(m[1]);
-      const {qty,qUnit} = parseQtyToken(m[2]);
-      const {unit,amount} = pickPricesFromLine(ln);
-      // 次行以降の説明行
-      let desc="";
-      for(let j=i+1;j<Math.min(i+8,lines.length);j++){
-        const s = normLine(lines[j]);
-        if(numLine.test(s) || lump.test(s) || skip.test(s)) continue;
-        desc = s; break;
-      }
-      const [name,model] = splitNameModel(desc);
-      const amt = amount || (qty*unit);
-      items.push({idx,name,model,qty,qUnit,unit,amount:amt});
-      continue;
-    }
+  // すでに使った説明行は再利用しない
+  const usedDesc = new Set();
 
-    if((m=ln.match(lump))){
-      const idx = Number(m[1]);
-      const amt = toInt(m[2]);
-      const [name,model] = splitNameModel(m[3]);
-      items.push({idx,name,model,qty:1,qUnit:"式",unit:amt,amount:amt});
-      continue;
+  // 近傍探索：ある行 idx の前後に半径を広げていき、最初に見つかった desc を返す
+  function findNearestDesc(pos){
+    const N = kinds.length;
+    for (let radius = 1; radius <= 8; radius++){
+      const left  = pos - radius;
+      const right = pos + radius;
+      if (left >= 0 && kinds[left].kind === 'desc' && !usedDesc.has(left)) { usedDesc.add(left); return kinds[left].s; }
+      if (right <  N && kinds[right].kind === 'desc' && !usedDesc.has(right)) { usedDesc.add(right); return kinds[right].s; }
     }
+    return ""; // 見つからなければ空
   }
+
+  const items = [];
+
+  // 1) 通常の数値行（No, 数量, 単価/金額は行内から抽出）
+  for (const r of kinds){
+    if (r.kind !== 'num') continue;
+    const m = r.s.match(numLine);
+    const idx = Number(m[1]);
+
+    // 数量トークンをパース（全角OK、"3台"/"3 台"など）
+    const { qty, qUnit } = parseQtyToken(m[2]);
+
+    // 金額は「行の右側の数値2つ」を優先抽出
+    const { unit, amount } = pickPricesFromLine(r.s);
+
+    // 前後どちらにも説明がある可能性 → 近い方を採用
+    const desc = findNearestDesc(r.i);
+    const [name, model] = splitNameModel(desc);
+    const amt = amount || (qty * unit);
+
+    items.push({ idx, name, model, qty, qUnit, unit, amount: amt });
+  }
+
+  // 2) 例外形式（No 金額 説明）※金額と説明が隣接でもOK
+  for (const r of kinds){
+    if (r.kind !== 'lump') continue;
+    const m = r.s.match(lump);
+    const idx = Number(m[1]);
+    const amt = toInt(m[2]); // "¥ 5,000" などOK
+    // m[3] は前に空白が無い可能性があるのでトリム
+    const desc = normLine(m[3] || "");
+    if (!desc) continue; // 説明が無い場合はスキップ
+    const [name, model] = splitNameModel(desc);
+    items.push({ idx, name, model, qty: 1, qUnit: "式", unit: amt, amount: amt });
+  }
+
+  // No の昇順で並べて返す
+  items.sort((a,b) => a.idx - b.idx);
   return items;
 }
-
-// ---- Excel出力（Rawは常に出力）----
-exportBtn.addEventListener('click',()=>{
-  const aoa=[["品名","型式","数量","単位","単価","金額"],...tableToAoa()];
-  const ws=XLSX.utils.aoa_to_sheet(aoa); ws['!cols']=[{wch:28},{wch:20},{wch:6},{wch:6},{wch:12},{wch:12}];
-  const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"明細");
-  const raw=XLSX.utils.aoa_to_sheet([["#","line"],...lastLines.map((s,i)=>[i+1,s])]); raw['!cols']=[{wch:6},{wch:100}];
-  XLSX.utils.book_append_sheet(wb,raw,"Raw");
-  const name=(currentFile?.name?.replace(/\.pdf$/i,'')||"converted")+"_変換.xlsx";
-  XLSX.writeFile(wb,name); statusEl.textContent="Excel出力 完了: "+name;
-});
-</script>
-</body>
-</html>
