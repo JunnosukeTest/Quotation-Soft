@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>PDF → Excel（最小シンプル昇順＋Raw固定）</title>
+<title>PDF → Excel（シンプル昇順＋Raw固定・0行でも出力可）</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" defer></script>
 <style>
@@ -72,10 +72,19 @@ async function handleFile(f){
     lastLines=lines.slice();
     const items=parseItems(lines);
     items.sort((a,b)=>a.idx-b.idx); // 昇順固定
+
+    if(items.length===0){
+      // 0件でも手入力して出力できるよう、空行を1行追加
+      addRow({name:"",model:"",qty:0,qUnit:"",unit:0,amount:0});
+      statusEl.textContent="解析結果0行：空行を1行追加しました（手入力→Excel出力できます）";
+      exportBtn.disabled=false; // 常に出力可能にする
+      return;
+    }
+
     items.forEach(addRow);
-    exportBtn.disabled=items.length===0;
+    exportBtn.disabled=false; // 1件以上でももちろん有効化
     statusEl.textContent=`解析完了: ${items.length} 行`;
-  }catch(err){console.error(err); statusEl.textContent="解析失敗: "+err.message;}
+  }catch(err){console.error(err); statusEl.textContent="解析失敗: "+(err.message||err);}
 }
 
 function rebuildLines(items){
@@ -84,9 +93,9 @@ function rebuildLines(items){
   let curY=null,buf=[],rows=[];
   for(const p of pts){
     if(curY===null||Math.abs(p.y-curY)<=tol){curY=curY??p.y;buf.push(p);}
-    else{buf.sort((a,b)=>a.x-b.x);rows.push(buf.map(x=>x.s).join(' ').trim());curY=p.y;buf=[p];}
+    else{buf.sort((a,b)=>a.x-b.x);rows.push(buf.map(x=>x.s).join(' ').replace(/\s{2,}/g,' ').trim());curY=p.y;buf=[p];}
   }
-  if(buf.length){buf.sort((a,b)=>a.x-b.x);rows.push(buf.map(x=>x.s).join(' ').trim());}
+  if(buf.length){buf.sort((a,b)=>a.x-b.x);rows.push(buf.map(x=>x.s).join(' ').replace(/\s{2,}/g,' ').trim());}
   rows.reverse(); return rows.filter(Boolean);
 }
 function addRow(it){
@@ -119,6 +128,7 @@ exportBtn.addEventListener('click',()=>{
   const aoa=[["品名","型式","数量","単位","単価","金額"],...tableToAoa()];
   const ws=XLSX.utils.aoa_to_sheet(aoa); ws['!cols']=[{wch:28},{wch:20},{wch:6},{wch:6},{wch:12},{wch:12}];
   const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"明細");
+  // Rawシートは常に出力
   const raw=XLSX.utils.aoa_to_sheet([["#","line"],...lastLines.map((s,i)=>[i+1,s])]); raw['!cols']=[{wch:6},{wch:100}];
   XLSX.utils.book_append_sheet(wb,raw,"Raw");
   const name=(currentFile?.name?.replace(/\.pdf$/i,'')||"converted")+"_変換.xlsx";
