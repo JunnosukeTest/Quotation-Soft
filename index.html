@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>PDF → Excel（シンプル昇順＋Raw固定・0行でも出力可）</title>
+<title>PDF → Excel（出力ボタン常時有効・昇順＋Raw固定）</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" defer></script>
 <style>
@@ -26,7 +26,7 @@
 </style>
 </head>
 <body>
-<header><h1>PDF → Excel（シンプル昇順＋Raw固定）</h1></header>
+<header><h1>PDF → Excel（出力ボタン常時有効・昇順＋Raw固定）</h1></header>
 <main>
   <div id="drop" class="drop">ここに PDF をドロップ<br><span class="hint">クリックでも選択可</span></div>
   <input id="pdfInput" type="file" accept="application/pdf" style="display:none;">
@@ -51,40 +51,62 @@ const exportBtn=document.getElementById('exportBtn'), statusEl=document.getEleme
 const tbody=document.getElementById('tbody');
 let currentFile=null, lastLines=[];
 
+// D&D
 ['dragenter','dragover'].forEach(ev=> drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('drag');}));
 ['dragleave','drop'].forEach(ev=> drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('drag');}));
 drop.addEventListener('drop',e=>{
-  e.preventDefault(); const f=[...e.dataTransfer.files].find(f=>/\.pdf$/i.test(f.name)); if(f) handleFile(f);
+  e.preventDefault();
+  const f=[...e.dataTransfer.files].find(f=>/\.pdf$/i.test(f.name));
+  if(f) handleFile(f);
 });
 drop.addEventListener('click',()=> pdfInput.click());
-pdfInput.addEventListener('change',()=>{if(pdfInput.files[0]) handleFile(pdfInput.files[0]);});
+pdfInput.addEventListener('change',()=>{
+  if(pdfInput.files[0]) handleFile(pdfInput.files[0]);
+});
 
 async function handleFile(f){
-  currentFile=f; statusEl.textContent=`読み込み中: ${f.name}`; exportBtn.disabled=true; tbody.innerHTML='';
+  currentFile=f;
+  statusEl.textContent=`読み込み中: ${f.name}`;
+  exportBtn.disabled=false;           // ← ここで即有効化（常に押せる）
+  tbody.innerHTML='';
+  ensureAtLeastOneRow();              // 先に空行1行置いておく（保険）
+
   try{
     const buf=await f.arrayBuffer();
     pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
     const pdf=await pdfjsLib.getDocument({data:buf}).promise;
+
     let lines=[];
     for(let p=1;p<=pdf.numPages;p++){
-      const page=await pdf.getPage(p); const c=await page.getTextContent(); lines=lines.concat(rebuildLines(c.items));
+      const page=await pdf.getPage(p);
+      const c=await page.getTextContent();
+      lines=lines.concat(rebuildLines(c.items));
     }
     lastLines=lines.slice();
+
     const items=parseItems(lines);
     items.sort((a,b)=>a.idx-b.idx); // 昇順固定
 
-    if(items.length===0){
-      // 0件でも手入力して出力できるよう、空行を1行追加
-      addRow({name:"",model:"",qty:0,qUnit:"",unit:0,amount:0});
-      statusEl.textContent="解析結果0行：空行を1行追加しました（手入力→Excel出力できます）";
-      exportBtn.disabled=false; // 常に出力可能にする
-      return;
+    // 抽出に成功したら、既存（保険の）空行を置き換え
+    if(items.length>0){
+      tbody.innerHTML='';
+      items.forEach(addRow);
+      statusEl.textContent=`解析完了: ${items.length} 行`;
+    }else{
+      statusEl.textContent="解析結果0行：空行を1行用意しました（手入力→Excel出力できます）";
     }
+  }catch(err){
+    console.error(err);
+    statusEl.textContent="解析失敗: "+(err.message||err);
+    // 失敗しても出力可能（先置きの空行でOK）
+  }finally{
+    exportBtn.disabled=false;        // ← 例外時でも必ず押せる
+    ensureAtLeastOneRow();
+  }
+}
 
-    items.forEach(addRow);
-    exportBtn.disabled=false; // 1件以上でももちろん有効化
-    statusEl.textContent=`解析完了: ${items.length} 行`;
-  }catch(err){console.error(err); statusEl.textContent="解析失敗: "+(err.message||err);}
+function ensureAtLeastOneRow(){
+  if(!tbody.querySelector('tr')) addRow({name:"",model:"",qty:0,qUnit:"",unit:0,amount:0});
 }
 
 function rebuildLines(items){
@@ -98,6 +120,7 @@ function rebuildLines(items){
   if(buf.length){buf.sort((a,b)=>a.x-b.x);rows.push(buf.map(x=>x.s).join(' ').replace(/\s{2,}/g,' ').trim());}
   rows.reverse(); return rows.filter(Boolean);
 }
+
 function addRow(it){
   const tr=document.createElement('tr');
   tr.innerHTML=`<td><input type="text" value="${it.name||''}"></td>
@@ -109,7 +132,8 @@ function addRow(it){
   tbody.appendChild(tr);
 }
 function tableToAoa(){return [...tbody.querySelectorAll('tr')].map(tr=>{
-  const t=tr.querySelectorAll('td input'); return [t[0].value,t[1].value,Number(t[2].value)||0,t[3].value,Number(t[4].value)||0,Number(t[5].value)||0];
+  const t=tr.querySelectorAll('td input');
+  return [t[0].value,t[1].value,Number(t[2].value)||0,t[3].value,Number(t[4].value)||0,Number(t[5].value)||0];
 });}
 function toInt(s){if(!s)return 0; s=String(s).replace(/[¥￥,]/g,''); const n=parseFloat(s); return isNaN(n)?0:n;}
 function splitNameModel(desc){const s=(desc||"").trim(),toks=s.split(' '); if(toks.length>=2)return[toks.slice(0,-1).join(' '),toks[toks.length-1]];return[s,""];}
