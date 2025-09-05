@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>見積PDF → Excel（シンプル / ルール対応版）</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" defer></script>
+  <style>
+    :root{ --brand:#0a6; --bg:#f6fbfa; --card:#fff; --line:#e5efe9; --ink:#103b33; --muted:#5c7d74; }
+    *{ box-sizing: border-box; }
+    body{ margin:0; background:var(--bg); color:var(--ink); font-family:ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Noto Sans JP','Hiragino Kaku Gothic ProN',Meiryo,sans-serif; }
+    header{ padding:18px 22px; border-bottom:1px solid var(--line); background:linear-gradient(90deg,#e9fbf3,#f6fbfa); }
+    h1{ margin:0; font-size:18px; }
+    main{ max-width:1000px; margin:0 auto; padding:16px; }
+    .card{ background:var(--card); border:1px solid var(--line); border-radius:16px; padding:16px; box-shadow:0 2px 10px rgba(0,0,0,.04); margin-bottom:16px; }
+    .drop{ border:2px dashed #bfe6da; background:#fafffe; border-radius:14px; padding:26px; text-align:center; color:#3b6f64; cursor:pointer; }
+    .drop.drag{ background:#eefaf6; border-color:#0a6; }
+    .row{ display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+    .btn{ background:var(--brand); color:#fff; border:0; padding:10px 16px; border-radius:10px; font-weight:700; cursor:pointer; }
+    .btn:disabled{ background:#9bcfbe; cursor:not-allowed; }
+    .hint{ font-size:12px; color:#5c7d74; }
+    table{ width:100%; border-collapse:separate; border-spacing:0; }
+    th,td{ padding:8px; border-bottom:1px solid #eef4f1; }
+    thead th{ background:#f2fbf7; position:sticky; top:0; }
+    .right{ text-align:right; }
+    .tbl-wrap{ overflow:auto; max-height:420px; border:1px solid var(--line); border-radius:12px; }
+    select,input[type=number]{ padding:8px 10px; border:1px solid #e5efe9; border-radius:10px; background:#fbfffe; }
+  </style>
+</head>
+<body>
+<header><h1>見積PDF → Excel（シンプル / ルール対応）</h1></header>
+<main>
+  <section class="card">
+    <div class="row" style="justify-content:space-between; align-items:flex-start;">
+      <div style="flex:1; min-width:320px;">
+        <div id="drop" class="drop">ここに PDF をドロップ<br><span class="hint">クリックでも選択できます</span></div>
+        <input id="pdfInput" type="file" accept="application/pdf" style="display:none;">
+        <div id="pdfName" class="hint" style="margin-top:6px;">未選択</div>
+      </div>
+      <div style="flex:1; min-width:320px;">
+        <div class="row">
+          <button id="parseBtn" class="btn" disabled>解析</button>
+          <button id="exportBtn" class="btn" disabled>Excel出力</button>
+        </div>
+        <div class="row" style="margin-top:8px;">
+          <label class="hint">番号の並び：</label>
+          <select id="sortOrder">
+            <option value="desc">降順（例：30,29,28…）</option>
+            <option value="asc">昇順（例：1,2,3…）</option>
+          </select>
+          <label class="hint"><input type="checkbox" id="includeRaw" checked> Rawシートも出力</label>
+        </div>
+        <div id="status" class="hint" style="margin-top:6px;">PDFを選択してください</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="tbl-wrap">
+      <table id="tbl">
+        <thead>
+          <tr>
+            <th>品名</th>
+            <th>型式</th>
+            <th class="right">数量</th>
+            <th>単位</th>
+            <th class="right">単価</th>
+            <th class="right">金額</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script>
+const drop = document.getElementById('drop');
+const pdfInput = document.getElementById('pdfInput');
+const pdfName = document.getElementById('pdfName');
+const parseBtn = document.getElementById('parseBtn');
+const exportBtn = document.getElementById('exportBtn');
+const statusEl = document.getElementById('status');
+const tbody = document.querySelector('#tbl tbody');
+const includeRawEl = document.getElementById('includeRaw');
+const sortOrderEl = document.getElementById('sortOrder');
+let currentFile = null;
+let lastLines = []; // rebuilt lines for Raw sheet
+
+['dragenter','dragover'].forEach(ev=> drop.addEventListener(ev, e=>{ e.preventDefault(); e.stopPropagation(); drop.classList.add('drag'); }));
+['dragleave','drop'].forEach(ev=> drop.addEventListener(ev, e=>{ e.preventDefault(); e.stopPropagation(); drop.classList.remove('drag'); }));
+drop.addEventListener('drop', e=>{
+  const f = [...e.dataTransfer.files].find(f=>/\.pdf$/i.test(f.name));
+  if(f){ setFile(f); }
+});
+drop.addEventListener('click', ()=> pdfInput.click());
+pdfInput.addEventListener('change', ()=>{
+  const f = pdfInput.files[0];
+  if(f){ setFile(f); }
+});
+
+function setFile(f){
+  currentFile = f;
+  pdfName.textContent = "選択中: " + f.name;
+  parseBtn.disabled = false;
+  exportBtn.disabled = true;
+  statusEl.textContent = "解析を実行してください";
+  tbody.innerHTML = "";
+  lastLines = [];
+}
+
+function addRow(it={name:'', model:'', qty:0, qUnit:'', unit:0, amount:0}){
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td><input class="name" value="${(it.name||'').replace(/"/g,'&quot;')}" style="width:100%;"></td>
+    <td><input class="model" value="${(it.model||'').replace(/"/g,'&quot;')}" style="width:100%;"></td>
+    <td class="right"><input class="qty" type="number" value="${it.qty||0}" style="width:80px;text-align:right;"></td>
+    <td><input class="qUnit" value="${(it.qUnit||'')}" style="width:60px;"></td>
+    <td class="right"><input class="unit" type="number" value="${it.unit||0}" style="width:120px;text-align:right;"></td>
+    <td class="right"><input class="amount" type="number" value="${it.amount||0}" style="width:120px;text-align:right;"></td>
+    <td><button class="del">削除</button></td>
+  `;
+  tr.querySelector('.del').addEventListener('click', ()=> tr.remove());
+  tbody.appendChild(tr);
+}
+
+function tbodyToItems(){
+  return [...tbody.querySelectorAll('tr')].map(tr=>({
+    name: tr.querySelector('.name').value.trim(),
+    model: tr.querySelector('.model').value.trim(),
+    qty: Number(tr.querySelector('.qty').value)||0,
+    qUnit: tr.querySelector('.qUnit').value.trim(),
+    unit: Number(tr.querySelector('.unit').value)||0,
+    amount: Number(tr.querySelector('.amount').value)||0,
+  }));
+}
+
+// ---- Parsing core ----
+function readFileAsArrayBuffer(file){
+  return new Promise((resolve, reject)=>{
+    const fr = new FileReader();
+    fr.onload = ()=> resolve(fr.result);
+    fr.onerror = reject;
+    fr.readAsArrayBuffer(file);
+  });
+}
+
+function rebuildLinesFromItems(items){
+  const tol = 2;
+  const pts = items.map(it=> ({x: it.transform[4], y: it.transform[5], s: it.str}));
+  pts.sort((a,b)=> (Math.abs(b.y - a.y) > tol ? b.y - a.y : a.x - b.x));
+  let currentY = null, buf = [], rows = [];
+  for(const p of pts){
+    if(currentY===null || Math.abs(p.y - currentY) <= tol){
+      currentY = currentY===null ? p.y : currentY;
+      buf.push(p);
+    }else{
+      buf.sort((a,b)=> a.x - b.x);
+      rows.push(buf.map(x=>x.s).join(' ').replace(/\s{2,}/g,' ').trim());
+      currentY = p.y; buf = [p];
+    }
+  }
+  if(buf.length){
+    buf.sort((a,b)=> a.x - b.x);
+    rows.push(buf.map(x=>x.s).join(' ').replace(/\s{2,}/g,' ').trim());
+  }
+  rows.reverse();
+  return rows.filter(Boolean);
+}
+
+function toNum(s){
+  if(!s) return NaN;
+  s = String(s).replace(/[！-～]/g, ch=> String.fromCharCode(ch.charCodeAt(0)-0xFEE0)).replace(/　/g,' ');
+  s = s.replace(/[¥￥,]/g,'').trim();
+  const m = s.match(/-?\d+(?:\.\d+)?/);
+  return m ? Number(m[0]) : NaN;
+}
+function toInt(s){
+  const n = toNum(s);
+  return isNaN(n) ? 0 : Math.round(n);
+}
+function splitNameModel(desc){
+  const s = (desc||"").trim().replace(/\s+/g,' ');
+  const toks = s.split(' ');
+  const looksModel = (t)=> /[A-Za-z]/.test(t) && /[0-9A-Za-z\-]/.test(t);
+  if(toks.length>=2 && looksModel(toks[toks.length-1])){
+    return [toks.slice(0,-1).join(' '), toks[toks.length-1]];
+  }
+  const m = s.match(/^([A-Za-z0-9][A-Za-z0-9\-]+)\s*(.+)$/);
+  if(m) return [m[2], m[1]];
+  return [s, ""];
+}
+
+// 数量トークン（例：2式/3個/1台/5）を (数, 単位) に分離
+function parseQtyToken(tok){
+  const m = String(tok||'').match(/^(\d+)\s*(式|個|台)?$/);
+  if(m) return {qty: Number(m[1]), qUnit: m[2] || ""};
+  return {qty: toInt(tok)||0, qUnit:""};
+}
+
+// 金額トークン列から 単価/金額 を推定（2値あれば [単価, 金額]、1値なら[値, 値]）
+function parsePrices(tokens){
+  const nums = tokens.map(t=> toInt(t)).filter(n=> !isNaN(n) && n>0);
+  if(nums.length >= 2) return {unit: nums[0], amount: nums[1]};
+  if(nums.length === 1) return {unit: nums[0], amount: nums[0]};
+  return {unit:0, amount:0};
+}
+
+// Strategy A: numeric-block + following descriptions pairing
+function parseStrategyA(lines){
+  // Capture patterns allowing qty suffix and possibly two amounts lumped
+  const numLine = /^(\d+)\s+(\d+(?:\s*(?:式|個|台))?)\s+([¥￥]?[0-9,\.]+(?:\s+[¥￥]?[0-9,\.]+)?)\s*$/;
+  const lump = /^(\d+)\s+([¥￥]?[0-9,\.]+)\s+(.+)$/;
+  const items = [];
+  for(let i=0;i<lines.length;i++){
+    const ln = lines[i];
+    let m;
+    if((m = ln.match(numLine))){
+      const idx = Number(m[1]);
+      const qtyTok = m[2];
+      const priceTok = m[3];
+      const {qty, qUnit} = parseQtyToken(qtyTok);
+      const priceParts = priceTok.split(/\s+/);
+      const {unit, amount} = parsePrices(priceParts);
+      // find following description
+      let desc = "";
+      for(let j=i+1;j<Math.min(i+8, lines.length); j++){
+        const s = lines[j];
+        if(numLine.test(s) || lump.test(s) || /^(合\s*計|項目|品名|御\s*見\s*積|納\s*期|有\s*効|支\s*払)/.test(s)) continue;
+        desc = s; break;
+      }
+      const [name, model] = splitNameModel(desc);
+      const amt = amount || (qty*unit);
+      items.push({idx, name, model, qty, qUnit, unit, amount: amt});
+      continue;
+    }
+    // 例外：1行完結（idx 金額 説明）→ 数量1, 単価＝金額
+    if((m = ln.match(lump))){
+      const idx = Number(m[1]);
+      const amt = toInt(m[2])||0;
+      const desc = m[3];
+      const [name, model] = splitNameModel(desc);
+      items.push({idx, name, model, qty:1, qUnit:"式", unit:amt, amount:amt});
+      continue;
+    }
+  }
+  // dedupe by idx, keep first
+  const seen = new Set(); const out = [];
+  for(const it of items){ if(seen.has(it.idx)) continue; seen.add(it.idx); out.push(it); }
+  return out;
+}
+
+// Strategy B: one-line fallback
+function parseStrategyB(lines){
+  const p1 = /^(\d+)\s+(.+?)\s+([A-Za-z0-9\-]+)\s+(\d+(?:\s*(?:式|個|台))?)\s+([¥￥]?[0-9,\.]+)\s+([¥￥]?[0-9,\.]+)$/;
+  const p2 = /^(\d+)\s+(.+?)\s+(\d+(?:\s*(?:式|個|台))?)\s+([¥￥]?[0-9,\.]+)\s+([¥￥]?[0-9,\.]+)$/;
+  const out = [];
+  for(const ln of lines){
+    let m;
+    if((m = ln.match(p1))){
+      const [_,idx,name,model,qtyTok,u,amt] = m;
+      const {qty, qUnit} = parseQtyToken(qtyTok);
+      const unit = toInt(u)||0; let amount = toInt(amt);
+      if(!amount) amount = unit*qty;
+      out.push({idx:Number(idx), name, model, qty, qUnit, unit, amount});
+    }else if((m = ln.match(p2))){
+      const [_,idx,name,qtyTok,u,amt] = m;
+      const {qty, qUnit} = parseQtyToken(qtyTok);
+      const unit = toInt(u)||0; let amount = toInt(amt);
+      if(!amount) amount = unit*qty;
+      out.push({idx:Number(idx), name, model:"", qty, qUnit, unit, amount});
+    }
+  }
+  return out;
+}
+
+async function parseCurrent(){
+  if(!currentFile) return;
+  statusEl.textContent = "解析中...";
+  parseBtn.disabled = true;
+  exportBtn.disabled = true;
+  try{
+    const buf = await readFileAsArrayBuffer(currentFile);
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    const task = pdfjsLib.getDocument({data: buf});
+    const pdf = await task.promise;
+    let allLines = [];
+    for(let p=1;p<=pdf.numPages;p++){
+      const page = await pdf.getPage(p);
+      const content = await page.getTextContent();
+      const rows = rebuildLinesFromItems(content.items);
+      allLines = allLines.concat(rows);
+    }
+    lastLines = allLines.slice();
+
+    const a = parseStrategyA(allLines);
+    const b = parseStrategyB(allLines);
+    const map = new Map();
+    a.forEach(it=> map.set(it.idx, it));
+    b.forEach(it=>{
+      if(!map.has(it.idx)) map.set(it.idx, it);
+      else{
+        const t = map.get(it.idx);
+        if(!t.name && it.name) t.name = it.name;
+        if(!t.model && it.model) t.model = it.model;
+        if(!(t.qty>0) && it.qty>0) t.qty = it.qty;
+        if(!t.qUnit && it.qUnit) t.qUnit = it.qUnit;
+        if(!(t.unit>0) && it.unit>0) t.unit = it.unit;
+        if(!(t.amount>0) && it.amount>0) t.amount = it.amount;
+      }
+    });
+    let out = [...map.values()];
+    // sort by index per user choice
+    const order = sortOrderEl.value; // 'desc' or 'asc'
+    out.sort((x,y)=> order==='asc' ? (x.idx - y.idx) : (y.idx - x.idx));
+
+    tbody.innerHTML = "";
+    out.forEach(r=> addRow(r));
+    statusEl.textContent = `解析完了: ${out.length} 行（必要なら表内で修正可）`;
+    exportBtn.disabled = false; // 0行でも出力OK
+  }catch(err){
+    console.error(err);
+    statusEl.textContent = "解析失敗: " + (err && err.message ? err.message : String(err));
+    exportBtn.disabled = false;
+  }finally{
+    parseBtn.disabled = false;
+  }
+}
+
+function exportExcel(){
+  const items = tbodyToItems();
+  const aoa = [["品名","型式","数量","単位","単価","金額"], ...items.map(i=>[i.name,i.model,i.qty,i.qUnit,i.unit,i.amount])];
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "明細");
+  if(includeRawEl.checked && lastLines && lastLines.length){
+    const raw = XLSX.utils.aoa_to_sheet(lastLines.map((s,i)=>[i+1, s]));
+    XLSX.utils.book_append_sheet(wb, raw, "Raw");
+  }
+  const name = (currentFile?.name?.replace(/\.pdf$/i,'') || "converted") + "_変換.xlsx";
+  XLSX.writeFile(wb, name);
+  statusEl.textContent = "Excel出力 完了: " + name;
+}
+
+parseBtn.addEventListener('click', parseCurrent);
+exportBtn.addEventListener('click', exportExcel);
+</script>
+</body>
+</html>
