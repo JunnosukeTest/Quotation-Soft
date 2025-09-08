@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>PDF → Excel（昇順固定・Raw常時出力・ラベル行対応）</title>
+<title>PDF → Excel（昇順固定・Raw順序修正・ラベル行対応）</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" defer></script>
 <style>
@@ -26,7 +26,7 @@
 </style>
 </head>
 <body>
-<header><h1>PDF → Excel（昇順固定・Raw常時出力・ラベル行対応）</h1></header>
+<header><h1>PDF → Excel（昇順固定・Raw順序修正・ラベル行対応）</h1></header>
 <main>
   <div id="drop" class="drop">ここに PDF をドロップ<br><span class="hint">クリックでも選択可</span></div>
   <input id="pdfInput" type="file" accept="application/pdf" style="display:none;">
@@ -71,7 +71,7 @@ function toHalfWidth(str){
 }
 function normalizeNumberGaps(s){
   s = s.replace(/\s+/g,' ').trim();
-  // "1 , 234" → "1,234" を数回適用
+  // "1 , 234" → "1,234"
   for(let i=0;i<4;i++){
     s = s.replace(/(\d)\s*,\s*(\d{3})(?!\d)/g, '$1,$2');
   }
@@ -291,13 +291,18 @@ function parseItems(lines){
   return items;
 }
 
-// --- Excel出力（Rawは常に出力） ---
+// --- Excel出力（Rawは常に出力・順序を上→下に修正） ---
 exportBtn.addEventListener('click',()=>{
   const aoa=[["品名","型式","数量","単位","単価","金額"],...tableToAoa()];
   const ws=XLSX.utils.aoa_to_sheet(aoa); ws['!cols']=[{wch:28},{wch:20},{wch:6},{wch:6},{wch:12},{wch:12}];
   const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"明細");
-  const raw=XLSX.utils.aoa_to_sheet([["#","line"],...lastLines.map((s,i)=>[i+1,s])]); raw['!cols']=[{wch:6},{wch:100}];
+
+  // Rawを画面の見た目に合わせて「上→下」で保存（逆転して出力）
+  const rawData = [["#","line"], ...lastLines.slice().reverse().map((s,i)=>[i+1, s])];
+  const raw = XLSX.utils.aoa_to_sheet(rawData);
+  raw['!cols']=[{wch:6},{wch:100}];
   XLSX.utils.book_append_sheet(wb,raw,"Raw");
+
   const name=(currentFile?.name?.replace(/\.pdf$/i,'')||"converted")+"_変換.xlsx";
   XLSX.writeFile(wb,name); statusEl.textContent="Excel出力 完了: "+name;
 });
