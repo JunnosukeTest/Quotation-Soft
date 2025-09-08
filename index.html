@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>PDF → Excel（所定フォーマット出力・サンプル準拠）</title>
+<title>PDF → Excel（所定レイアウト A27–V33 対応・このPDF完成版）</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" defer></script>
 <style>
@@ -26,7 +26,7 @@
 </style>
 </head>
 <body>
-<header><h1>PDF → Excel（所定フォーマット出力・サンプル準拠）</h1></header>
+<header><h1>PDF → Excel（所定レイアウト A27–V33 対応）</h1></header>
 <main>
   <div id="drop" class="drop">ここに PDF をドロップ<br><span class="hint">クリックでも選択可</span></div>
   <input id="pdfInput" type="file" accept="application/pdf" style="display:none;">
@@ -46,7 +46,7 @@
 </main>
 
 <script>
-// --- 要素 ---
+// --- 要素参照 ---
 const drop=document.getElementById('drop'), pdfInput=document.getElementById('pdfInput');
 const exportBtn=document.getElementById('exportBtn'), statusEl=document.getElementById('status');
 const tbody=document.getElementById('tbody');
@@ -65,7 +65,7 @@ pdfInput.addEventListener('change',()=>{
   if(pdfInput.files[0]) handleFile(pdfInput.files[0]);
 });
 
-// --- 正規化 ---
+// --- 正規化ユーティリティ ---
 function toHalfWidth(str){
   return String(str).replace(/[！-～]/g, ch => String.fromCharCode(ch.charCodeAt(0)-0xFEE0)).replace(/　/g,' ');
 }
@@ -90,11 +90,11 @@ function parseQtyToken(tok){
   return {qty:n||0, qUnit:""};
 }
 
-// --- PDF処理 ---
+// --- 処理本体 ---
 async function handleFile(f){
   currentFile=f;
   statusEl.textContent=`読み込み中: ${f.name}`;
-  exportBtn.disabled=false;           // 選んだ瞬間に押せる
+  exportBtn.disabled=false;           // 選択直後から出力可
   tbody.innerHTML='';
   ensureAtLeastOneRow();
 
@@ -133,7 +133,9 @@ async function handleFile(f){
 function ensureAtLeastOneRow(){
   if(!tbody.querySelector('tr')) addRow({name:"",model:"",qty:0,qUnit:"",unit:0,amount:0});
 }
+
 function rebuildLines(items){
+  // yで行グループ化 → xで並べ → 連結して数値の分断を補正
   const tol=2, pts=items.map(it=>({x:it.transform[4],y:it.transform[5],s: toHalfWidth(it.str)}));
   pts.sort((a,b)=> (Math.abs(b.y-a.y)>tol?b.y-a.y:a.x-b.x));
   let curY=null,buf=[],rows=[];
@@ -151,11 +153,11 @@ function rebuildLines(items){
     const joined = buf.map(x=>x.s).join(' ').replace(/\s{2,}/g,' ').trim();
     rows.push(normalizeNumberGaps(joined));
   }
-  rows.reverse(); 
+  rows.reverse();
   return rows.filter(Boolean);
 }
 
-// --- テーブルUI ---
+// --- 表UI ---
 function addRow(it){
   const tr=document.createElement('tr');
   tr.innerHTML=`<td><input type="text" value="${it.name||''}"></td>
@@ -166,26 +168,18 @@ function addRow(it){
     <td class="right"><input type="number" value="${it.amount||0}"></td>`;
   tbody.appendChild(tr);
 }
-function tableToItems(){ // 画面の値を {name,model,qty,qUnit,unit,amount} に戻す
+function tableToItems(){
   return [...tbody.querySelectorAll('tr')].map(tr=>{
     const t=tr.querySelectorAll('td input');
-    return {
-      name: t[0].value.trim(),
-      model: t[1].value.trim(),
-      qty: Number(t[2].value)||0,
-      qUnit: t[3].value.trim(),
-      unit: Number(t[4].value)||0,
-      amount: Number(t[5].value)||0,
-      isLump: false
-    };
+    return { name:t[0].value.trim(), model:t[1].value.trim(), qty:Number(t[2].value)||0, qUnit:t[3].value.trim(), unit:Number(t[4].value)||0, amount:Number(t[5].value)||0, isLump:false };
   });
 }
 
-// --- 解析（ラベル行 → 数値行＋近傍説明 → 金額+説明一体） ---
+// --- 抽出ロジック ---
 function pickPricesFromLine(s){
   const nums=[]; const re=/[¥￥]?\s*\-?\d{1,3}(?:,\d{3})*(?:\.\d+)?/g; let m;
   while((m=re.exec(s))){ nums.push(toInt(m[0])); }
-  const filtered=nums.filter(n=> n!==0); // 0は価格としては除外（必要なら調整）
+  const filtered=nums.filter(n=> n!==0);
   if(filtered.length>=2) return {unit: filtered[filtered.length-2], amount: filtered[filtered.length-1]};
   if(filtered.length===1) return {unit: filtered[0], amount: filtered[0]};
   return {unit:0, amount:0};
@@ -199,7 +193,6 @@ function splitNameModel(desc){
   if(m) return [m[2], m[1]];
   return [s,""];
 }
-
 function parseItems(lines){
   const rows=lines.map((raw,i)=>({i,s:normLine(raw||"")}));
   const labeledRe=/^\s*(\d+)\s*\(品名\)\s*(.+?)\s*\(型式\)\s*([^\s]+)\s*\(数量\)\s*(\d+)\s*([^\s]+)\s*\(仕切\)\s*([¥￥]?\s*\-?\d{1,3}(?:,\d{3})*(?:\.\d+)?)\s*(?:\((?:金額)?\)\s*([¥￥]?\s*\-?\d{1,3}(?:,\d{3})*(?:\.\d+)?)\s*)?$/;
@@ -237,11 +230,11 @@ function parseItems(lines){
     return "";
   }
 
-  // 数値行（No / 数量 / 価格）
+  // 数値行
   for(const r of kinds){
     if(r.kind!=='num') continue;
     const idxNum=Number(r.s.match(numLine)[1]);
-    if(items.find(it=>it.idx===idxNum)) continue; // 重複回避
+    if(items.find(it=>it.idx===idxNum)) continue;
     const m=r.s.match(numLine);
     const idx=Number(m[1]); const {qty,qUnit}=parseQtyToken(m[2]);
     const {unit,amount}=pickPricesFromLine(r.s);
@@ -249,70 +242,79 @@ function parseItems(lines){
     items.push({idx,name,model,qty,qUnit,unit,amount:(amount||qty*unit),isLump:false});
   }
 
-  // 金額+説明 一体（例：値引き、梱包費など）
+  // 金額+説明（値引き/諸経費など）
   for(const r of kinds){
     if(r.kind!=='lump') continue;
     const m=r.s.match(lump);
     const idx=Number(m[1]); if(items.find(it=>it.idx===idx)) continue;
     const amt=toInt(m[2]); const desc=normLine(m[3]||""); if(!desc) continue;
     const [name,model]=splitNameModel(desc);
-    items.push({idx,name,model,qty:1,qUnit:"式",unit:0,amount:amt,isLump:true}); // 単価は空欄にしたいので unit=0
+    items.push({idx,name,model,qty:1,qUnit:"式",unit:0,amount:amt,isLump:true});
   }
 
   items.sort((a,b)=>a.idx-b.idx);
   return items;
 }
 
-// --- Excel出力（サンプル準拠の3シート） ---
+// --- Excel出力（所定レイアウト A27–V33） ---
 exportBtn.addEventListener('click',()=>{
-  const parsedItems = parseItems(lastLines);
+  const parsedItems = parseItems(lastLines); // 画面編集を反映したい場合は tableToItems() に差し替え
   parsedItems.sort((a,b)=>a.idx-b.idx);
-
-  // 画面編集を反映したい場合は下行に差し替え：
-  // const parsedItems = tableToItems();
 
   const wb = XLSX.utils.book_new();
 
-  // ========== 1) 明細（A=品名+型式, B=数量, C=単価, D=金額／先頭1行は空行） ==========
+  // 1) 明細：A=品名+型式, B=数量, C=単価(値引き等は空欄), D=金額
   const detailRows = parsedItems.map(it=>{
     const nameModel = [it.name, it.model].filter(Boolean).join(' ');
-    const unit = it.isLump ? "" : it.unit; // 値引き等は単価空欄
-    return [nameModel, it.qty || 0, unit, it.amount || 0];
+    const unit = it.isLump ? "" : it.unit;
+    return [nameModel, it.qty||0, unit, it.amount||0];
   });
-  const detailAOA = [["","","",""], ...detailRows]; // 先頭1行空
-  const wsDetail = XLSX.utils.aoa_to_sheet(detailAOA);
+  const wsDetail = XLSX.utils.aoa_to_sheet([["","","",""], ...detailRows]); // 先頭1行は空行
   wsDetail['!cols']=[{wch:40},{wch:8},{wch:12},{wch:12}];
   XLSX.utils.book_append_sheet(wb, wsDetail, "明細");
 
-  // ========== 2) Raw（見た目順“上→下”に修正して保存） ==========
+  // 2) Raw（見た目順“上→下”）
   const rawDisplay = lastLines.slice().reverse();
-  const rawAOA = [["#","line"], ...rawDisplay.map((s,i)=>[i+1, s])];
-  const wsRaw = XLSX.utils.aoa_to_sheet(rawAOA);
+  const wsRaw = XLSX.utils.aoa_to_sheet([["#","line"], ...rawDisplay.map((s,i)=>[i+1,s])]);
   wsRaw['!cols']=[{wch:6},{wch:100}];
   XLSX.utils.book_append_sheet(wb, wsRaw, "Raw");
 
-  // ========== 3) 見積書取込(国内)_レイアウト (2) ==========
-  // 列は A..V (22列)。1行目にヘッダ、2行目以降にデータ。
-  const header = Array(22).fill("");
-  header[1]  = "品名・仕様"; // B
-  header[13] = "単価";       // N
-  header[16] = "金額";       // Q
-  header[20] = "率";         // U
-  header[21] = "買価格";     // V
+  // 3) 見積書取込(国内)_レイアウト：A27～V33 に最大7行
+  const layoutRows = 33, layoutCols = 22; // A..V
+  const layoutAOA = Array.from({length: layoutRows}, ()=> Array(layoutCols).fill(""));
+  // 1行目ヘッダ（B,N,Q,U,V）
+  layoutAOA[0][1]  = "品名・仕様";
+  layoutAOA[0][13] = "単価";
+  layoutAOA[0][16] = "金額";
+  layoutAOA[0][20] = "率";
+  layoutAOA[0][21] = "買価格";
 
-  const layoutAOA = [header];
-  parsedItems.forEach((it, idx)=>{
-    const row = Array(22).fill("");
-    row[0] = idx+1; // A: 行番号
-    row[1] = [it.name, it.model].filter(Boolean).join(' '); // B: 品名・仕様
-    // V: 買価格 = 単価が0/空なら金額、それ以外は単価
-    const buy = (it.unit && it.unit!==0) ? it.unit : (it.amount||0);
-    row[21] = buy;
-    layoutAOA.push(row);
-  });
+  const maxLines = 7;
+  for(let i=0;i<Math.min(maxLines, parsedItems.length); i++){
+    const it = parsedItems[i];
+    const r  = 26 + i; // 0-based: 27行目=26 → A27..V33
+    const nameModel = [it.name, it.model].filter(Boolean).join(' ');
+    const unit = it.isLump ? "" : (it.unit||0);
+    const amount = it.amount||0;
+    const buy = unit ? unit : amount;
+
+    layoutAOA[r][0]  = i+1;         // A: 行番号
+    layoutAOA[r][1]  = nameModel;   // B: 品名・仕様
+    layoutAOA[r][13] = unit === "" ? "" : unit; // N: 単価（値引き等は空欄）
+    layoutAOA[r][16] = amount;      // Q: 金額
+    layoutAOA[r][21] = buy;         // V: 買価格（単価が無ければ金額）
+  }
 
   const wsLayout = XLSX.utils.aoa_to_sheet(layoutAOA);
   wsLayout['!cols'] = Array.from({length:22},(_,i)=>(
-    i===1 ? {wch:40} : (i===0 ? {wch:6} : (i>=13 && i<=16 ? {wch:10} : (i>=20 ? {wch:10} : {wch:8})))
+    i===1 ? {wch:40} : (i===0 ? {wch:6} : (i===13||i===16||i===21 ? {wch:12}:{wch:8}))
   ));
-  XLSX.utils.book_append_sheet(wb, wsLayout, "見積
+  XLSX.utils.book_append_sheet(wb, wsLayout, "見積書取込(国内)_レイアウト");
+
+  const name=(currentFile?.name?.replace(/\.pdf$/i,'')||"converted")+"_所定レイアウト.xlsx";
+  XLSX.writeFile(wb,name);
+  statusEl.textContent="Excel出力 完了: "+name;
+});
+</script>
+</body>
+</html>
