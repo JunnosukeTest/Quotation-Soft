@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>PDF → Excel（昇順固定・Raw順序修正・ラベル行対応）</title>
+<title>PDF → Excel（昇順固定・Raw順序修正・ラベル行対応・テンプレ出力）</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" defer></script>
 <style>
@@ -26,7 +26,7 @@
 </style>
 </head>
 <body>
-<header><h1>PDF → Excel（昇順固定・Raw順序修正・ラベル行対応）</h1></header>
+<header><h1>PDF → Excel（昇順固定・Raw順序修正・ラベル行対応・テンプレ出力）</h1></header>
 <main>
   <div id="drop" class="drop">ここに PDF をドロップ<br><span class="hint">クリックでも選択可</span></div>
   <input id="pdfInput" type="file" accept="application/pdf" style="display:none;">
@@ -71,11 +71,7 @@ function toHalfWidth(str){
 }
 function normalizeNumberGaps(s){
   s = s.replace(/\s+/g,' ').trim();
-  // "1 , 234" → "1,234"
-  for(let i=0;i<4;i++){
-    s = s.replace(/(\d)\s*,\s*(\d{3})(?!\d)/g, '$1,$2');
-  }
-  // "¥ 12 , 300" → "¥12,300"
+  for(let i=0;i<4;i++){ s = s.replace(/(\d)\s*,\s*(\d{3})(?!\d)/g, '$1,$2'); }
   s = s.replace(/([¥￥])\s+/g, '$1');
   return s;
 }
@@ -139,7 +135,6 @@ function ensureAtLeastOneRow(){
 }
 
 function rebuildLines(items){
-  // yで行にまとめ → xで並べ → 結合後に数値の分断を修復
   const tol=2, pts=items.map(it=>({x:it.transform[4],y:it.transform[5],s: toHalfWidth(it.str)}));
   pts.sort((a,b)=> (Math.abs(b.y-a.y)>tol?b.y-a.y:a.x-b.x));
   let curY=null,buf=[],rows=[];
@@ -203,8 +198,6 @@ function parseItems(lines){
   const rows = lines.map((raw, i) => ({ i, s: normLine(raw || "") }));
 
   // 1) ラベル付き1行完結（最優先）
-  //    例: "1 (品名)コントローラー (型式)MFC-S008 (数量)1 台 (仕切)187,000 ()187,000"
-  //        "1 (品名)A (型式)B (数量)3 個 (仕切)12,000 (金額)36,000"
   const labeledRe =
     /^\s*(\d+)\s*\(品名\)\s*(.+?)\s*\(型式\)\s*([^\s]+)\s*\(数量\)\s*(\d+)\s*([^\s]+)\s*\(仕切\)\s*([¥￥]?\s*\d{1,3}(?:,\d{3})*(?:\.\d+)?)\s*(?:\((?:金額)?\)\s*([¥￥]?\s*\d{1,3}(?:,\d{3})*(?:\.\d+)?)\s*)?$/;
 
@@ -216,7 +209,6 @@ function parseItems(lines){
 
   const skip    = /^(合\s*計|項目|品名|御\s*見\s*積|納\s*期|有\s*効|支\s*払)/;
 
-  // 行種別付け
   const kinds = rows.map(r => {
     if (labeledRe.test(r.s)) return { ...r, kind: 'labeled' };
     if (numLine.test(r.s))   return { ...r, kind: 'num' };
@@ -227,7 +219,7 @@ function parseItems(lines){
 
   const items = [];
 
-  // --- ラベル付き（最優先で取り込む）---
+  // --- ラベル付き（最優先） ---
   for(const r of kinds){
     if(r.kind !== 'labeled') continue;
     const m = r.s.match(labeledRe);
@@ -242,7 +234,7 @@ function parseItems(lines){
     items.push({ idx, name, model, qty, qUnit, unit, amount });
   }
 
-  // 近傍説明探索（説明行は重複使用しない）
+  // --- 近傍説明探索 ---
   const usedDesc = new Set();
   function findNearestDesc(pos){
     const N = kinds.length;
@@ -255,12 +247,11 @@ function parseItems(lines){
     return "";
   }
 
-  // --- 数値行（No, 数量, 単価/金額は行中）---
+  // --- 数値行 ---
   for(const r of kinds){
     if(r.kind !== 'num') continue;
     const idxNum = Number(r.s.match(numLine)[1]);
-    // 同じNoがラベル付きで既にあるならスキップ
-    if(items.find(it=> it.idx===idxNum)) continue;
+    if(items.find(it=> it.idx===idxNum)) continue; // ラベル付きと重複回避
 
     const m = r.s.match(numLine);
     const idx = Number(m[1]);
@@ -286,22 +277,56 @@ function parseItems(lines){
     items.push({ idx, name, model, qty:1, qUnit:"式", unit:amt, amount:amt });
   }
 
-  // No 昇順で返す
   items.sort((a,b)=> a.idx - b.idx);
   return items;
 }
 
-// --- Excel出力（Rawは常に出力・順序を上→下に修正） ---
+// --- Excel出力（Rawは常に出力・順序を上→下に修正 & レイアウト生成） ---
 exportBtn.addEventListener('click',()=>{
+  // 明細シート
   const aoa=[["品名","型式","数量","単位","単価","金額"],...tableToAoa()];
-  const ws=XLSX.utils.aoa_to_sheet(aoa); ws['!cols']=[{wch:28},{wch:20},{wch:6},{wch:6},{wch:12},{wch:12}];
-  const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"明細");
+  const ws=XLSX.utils.aoa_to_sheet(aoa); 
+  ws['!cols']=[{wch:28},{wch:20},{wch:6},{wch:6},{wch:12},{wch:12}];
 
-  // Rawを画面の見た目に合わせて「上→下」で保存（逆転して出力）
-  const rawData = [["#","line"], ...lastLines.slice().reverse().map((s,i)=>[i+1, s])];
+  // Raw(B19～B26) を明細の H2 から貼り付け
+  const rawDisplay = lastLines.slice().reverse(); // Rawを見た目順に
+  const seg = rawDisplay.slice(18, 26); // B19～B26 → 0-basedで18..25
+  const segAoa = [["Raw(B19-B26)"], ...seg.map(s=>[s||""])];
+  XLSX.utils.sheet_add_aoa(ws, segAoa, {origin: "H2"});
+
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,"明細");
+
+  // Rawシート（見た目順で保存）
+  const rawData = [["#","line"], ...rawDisplay.map((s,i)=>[i+1, s])];
   const raw = XLSX.utils.aoa_to_sheet(rawData);
   raw['!cols']=[{wch:6},{wch:100}];
   XLSX.utils.book_append_sheet(wb,raw,"Raw");
+
+  // 見積書取込(国内)_レイアウト シート作成：A27～V33 に明細先頭7行を配置
+  const detailRows = aoa.slice(1); // ヘッダ除去
+  const maxRows = 7;
+  const layoutRows = 33, layoutCols = 22; // A..V
+  const layoutAOA = Array.from({length: layoutRows}, ()=> Array(layoutCols).fill(""));
+
+  for(let i=0;i<Math.min(maxRows, detailRows.length); i++){
+    const r = detailRows[i]; // [品名,型式,数量,単位,単価,金額]
+    const baseRow = 26 + i;  // 0-based → 27行目=idx26
+    layoutAOA[baseRow][0] = r[0] || "";             // A: 品名
+    layoutAOA[baseRow][1] = r[1] || "";             // B: 型式
+    layoutAOA[baseRow][2] = r[2] || 0;              // C: 数量
+    layoutAOA[baseRow][3] = r[3] || "";             // D: 単位
+    layoutAOA[baseRow][4] = r[4] || 0;              // E: 単価
+    layoutAOA[baseRow][5] = r[5] || 0;              // F: 金額
+    // G～V は空欄のまま（必要に応じてマッピング拡張可）
+  }
+
+  const layoutWS = XLSX.utils.aoa_to_sheet(layoutAOA);
+  // レイアウトの列幅（見やすさ）
+  layoutWS['!cols'] = Array.from({length:22}, (_,i)=>(
+    i<=1 ? {wch:28} : i<=5 ? {wch:12} : {wch:8}
+  ));
+  XLSX.utils.book_append_sheet(wb, layoutWS, "見積書取込(国内)_レイアウト");
 
   const name=(currentFile?.name?.replace(/\.pdf$/i,'')||"converted")+"_変換.xlsx";
   XLSX.writeFile(wb,name); statusEl.textContent="Excel出力 完了: "+name;
