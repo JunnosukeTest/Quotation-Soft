@@ -195,23 +195,36 @@ exportBtn.addEventListener('click',()=>{
     XLSX.utils.book_append_sheet(wb,wsRaw,"Raw");
 
     // 3) 見積書取込(国内)_レイアウト (2)
-    const header=Array(22).fill(""); header[1]="品名・仕様"; header[13]="単価"; header[16]="金額"; header[20]="率"; header[21]="買価格";
-    const layout=[header];
-    uiItems.forEach((it,i)=>{
-      const row=Array(22).fill("");
-      const nm=[it.name,it.model].filter(Boolean).join(' ');
-      const unit=(it.unit===""?"":(Number(it.unit)||0));
-      const amount=it.amount||0;
-      row[0]=i+1;           // A: 行番号
-      row[1]=nm;            // B: 品名・仕様
-      row[13]=unit===""?"":unit; // N: 単価（空欄可）
-      row[16]=amount;       // Q: 金額
-      row[21]=unit===""?amount:unit; // V: 買価格
-      layout.push(row);
-    });
-    const wsLayout=XLSX.utils.aoa_to_sheet(layout);
-    wsLayout['!cols']=Array.from({length:22},(_,i)=> i===1?{wch:40} : (i===0?{wch:6} : (i===13||i===16||i===21?{wch:12}:{wch:8})));
-    XLSX.utils.book_append_sheet(wb,wsLayout,"見積書取込(国内)_レイアウト (2)");
+const header=Array(22).fill("");
+header[1]="品名・仕様"; header[13]="単価"; header[16]="金額"; header[20]="率"; header[21]="買価格";
+const layout=[header];
+uiItems.forEach((it,i)=>{
+  const row=Array(22).fill("");
+  const nm=[it.name,it.model].filter(Boolean).join(' ');
+  const unit=(it.unit===""?"":(Number(it.unit)||0));
+  const amount=it.amount||0;
+  row[0]=i+1;           // A: 行番号
+  row[1]=nm;            // B: 品名・仕様（後で B-K を結合）
+  row[13]=unit===""?"":unit; // N: 単価
+  row[16]=amount;       // Q: 金額
+  row[21]=unit===""?amount:unit; // V: 買価格
+  layout.push(row);
+});
+const wsLayout=XLSX.utils.aoa_to_sheet(layout);
+
+// 列幅
+wsLayout['!cols']=Array.from({length:22},(_,i)=> 
+  i===1?{wch:40}:(i===0?{wch:6}:(i===13||i===16||i===21?{wch:12}:{wch:8}))
+);
+
+// ★ B-K を結合する設定を追加 ★
+const merges=[];
+for(let r=1; r<=layout.length; r++){
+  merges.push({s:{r:r,c:1}, e:{r:r,c:10}}); // row=r, col=1(B) ～ col=10(K)
+}
+wsLayout['!merges']=merges;
+
+XLSX.utils.book_append_sheet(wb,wsLayout,"見積書取込(国内)_レイアウト (2)");
 
     const name=(currentFile?.name?.replace(/\.pdf$/i,'')||"converted")+"_同フォーマット.xlsx";
     XLSX.writeFile(wb,name);
