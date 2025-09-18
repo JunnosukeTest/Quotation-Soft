@@ -3,233 +3,449 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>PDF → Excel（“明細/Raw/見積書取込(国内)_レイアウト (2)” 出力）</title>
+<title>価格表示ツール（PDF→型式→NR/SP/HNR表示・コピー対応）</title>
 <style>
-  body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans JP",Meiryo,sans-serif;background:#f6fbf9;margin:0}
-  header{padding:14px 18px;border-bottom:1px solid #dde7e3;background:#fff}
-  h1{margin:0;font-size:16px}
-  main{max-width:960px;margin:0 auto;padding:16px}
-  .drop{border:2px dashed #9dd8c9;border-radius:12px;background:#fff;padding:28px;text-align:center;cursor:pointer}
-  .drop.drag{background:#f0faf7;border-color:#0a6}
-  .row{margin:14px 0;display:flex;align-items:center;gap:12px}
-  .btn{background:#0a6;color:#fff;border:0;padding:10px 14px;border-radius:8px;font-weight:700;cursor:pointer}
+  :root{--brand:#0a6}
+  body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans JP",Meiryo,sans-serif;background:#f7faf9;margin:0}
+  header{background:#fff;border-bottom:1px solid #e4efe9;padding:12px 16px}
+  h1{font-size:16px;margin:0}
+  main{max-width:1200px;margin:0 auto;padding:16px;display:grid;gap:16px}
+  .card{background:#fff;border:1px solid #e4efe9;border-radius:12px;overflow:hidden}
+  .card h2{margin:0;padding:10px 12px;background:#f3fbf7;border-bottom:1px solid #e8f2ee;font-size:14px}
+  .card .body{padding:12px}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .btn{background:var(--brand);color:#fff;border:0;padding:9px 12px;border-radius:8px;font-weight:700;cursor:pointer}
   .btn:disabled{background:#9acfbf;cursor:not-allowed}
-  .hint{font-size:12px;opacity:.85}
-  .tbl{overflow:auto;max-height:420px;border:1px solid #dde7e3;border-radius:8px;background:#fff}
+  .ghost{background:#eef5f2;color:#234;border:0;padding:8px 10px;border-radius:8px}
+  input[type=file]{padding:6px 8px;border:1px solid #dce7e2;border-radius:8px;background:#fff}
+  .drop{border:2px dashed #9dd8c9;border-radius:10px;padding:20px;text-align:center;cursor:pointer;background:#fff}
+  .drop.drag{background:#eefaf6;border-color:var(--brand)}
+  .muted{font-size:12px;opacity:.8}
   table{width:100%;border-collapse:collapse}
-  th,td{padding:6px 8px;border-bottom:1px solid #eef4f1}
-  thead th{background:#f5fbf9;position:sticky;top:0}
+  th,td{padding:6px 8px;border-bottom:1px solid #eef4f1;vertical-align:middle}
+  thead th{background:#f5fbf9;position:sticky;top:0;z-index:1}
   .right{text-align:right}
-  input[type=text],input[type=number]{width:100%;border:1px solid #dde7e3;border-radius:6px;padding:4px 6px}
+  .editable{width:100%;border:1px solid #dce7e2;border-radius:8px;padding:6px 8px}
+  select{border:1px solid #dce7e2;border-radius:8px;padding:6px 8px}
+  .ok{color:#0a6;font-weight:700}
+  .warn{color:#c00;font-weight:700}
+  .copy-btn{margin-left:8px;border:1px solid #dbe6e1;background:#fff;border-radius:6px;cursor:pointer;padding:4px 6px;font-size:12px}
+  .copy-btn.copied{background:#e6fbef;border-color:#a7e2c5;color:#086}
+  .cell-flex{display:flex;align-items:center;gap:6px}
+  .cell-flex.end{justify-content:flex-end}
+  .mono{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, "Roboto Mono", monospace}
 </style>
 </head>
 <body>
-<header><h1>PDF → Excel（“明細/Raw/見積書取込(国内)_レイアウト (2)” 出力）</h1></header>
+<header><h1>価格表示ツール（PDF→型式→NR/SP/HNR表示・コピー対応）</h1></header>
 <main>
-  <div id="drop" class="drop">ここに PDF をドロップ<br><span class="hint">クリックでも選択可（.pdf）</span></div>
-  <input id="pdfInput" type="file" accept=".pdf,application/pdf" style="display:none;">
-  <div class="row">
-    <button id="exportBtn" class="btn" disabled>Excel出力</button>
-    <span id="status" class="hint">PDFを選択してください</span>
+  <!-- Step 1: 価格マスタの読込 -->
+  <div class="card">
+    <h2>① 価格マスタ（Excel/CSV）</h2>
+    <div class="body">
+      <div class="row">
+        <input id="masterInput" type="file" accept=".xlsx,.xls,.csv" />
+        <span id="masterStatus" class="muted">未読込</span>
+        <button id="downloadSample" class="ghost">サンプルCSV</button>
+      </div>
+      <div class="muted" style="margin-top:6px">
+        列名は自動認識します：<b>型式/品番</b>、<b>NR</b>、<b>SP</b>、<b>HNR</b>（あれば）。<br>
+        既存の<b>定価/上代</b>→NR扱い、<b>仕入/仕切/原価</b>→SP扱いとしても取り込みます。
+      </div>
+    </div>
   </div>
 
-  <div class="tbl">
-    <table>
-      <thead><tr>
-        <th>品名</th><th>型式</th><th class="right">数量</th><th>単位</th><th class="right">単価</th><th class="right">金額</th>
-      </tr></thead>
-      <tbody id="tbody"></tbody>
-    </table>
+  <!-- Step 2: PDF投入→型式抽出＆編集 -->
+  <div class="card">
+    <h2>② PDF（見積）から型式抽出 → 編集</h2>
+    <div class="body">
+      <div class="row">
+        <div id="drop" class="drop">PDFをドロップ / クリックして選択</div>
+        <input id="pdfInput" type="file" accept=".pdf,application/pdf" style="display:none">
+        <span id="pdfStatus" class="muted">未読込</span>
+      </div>
+      <div style="margin-top:10px; max-height:360px; overflow:auto; border:1px solid #eef4f1; border-radius:8px">
+        <table>
+          <thead><tr><th style="width:56px">No</th><th>抽出型式（手修正可）</th></tr></thead>
+          <tbody id="modelsTbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 3: 見積表示（NR/SP/HNR） -->
+  <div class="card">
+    <h2>③ 見積表示（型式・NR・SP・HNR）</h2>
+    <div class="body">
+      <div class="row" style="margin-bottom:8px">
+        <button id="showBtn" class="btn" disabled>見積表示</button>
+        <button id="exportCsv" class="ghost" disabled>CSVエクスポート</button>
+        <span id="resultStatus" class="muted">マスタと型式が必要です</span>
+      </div>
+      <div class="row" style="margin-bottom:8px">
+        CSV出力マッピング：
+        定価 = 
+        <select id="mapList">
+          <option value="NR" selected>NR</option>
+          <option value="SP">SP</option>
+          <option value="HNR">HNR</option>
+        </select>
+        ／ 仕入 = 
+        <select id="mapCost">
+          <option value="SP" selected>SP</option>
+          <option value="NR">NR</option>
+          <option value="HNR">HNR</option>
+        </select>
+        <span class="muted">（画面表示は常に NR/SP/HNR の3列を出します）</span>
+      </div>
+      <div style="max-height:460px; overflow:auto; border:1px solid #eef4f1; border-radius:8px">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:56px">No</th>
+              <th>型式（PDF/編集）</th>
+              <th>マスタ型式（候補）</th>
+              <th class="right">NR</th>
+              <th class="right">SP</th>
+              <th class="right">HNR</th>
+              <th>状態</th>
+            </tr>
+          </thead>
+          <tbody id="resultTbody"></tbody>
+        </table>
+      </div>
+    </div>
   </div>
 </main>
 
+<!-- ライブラリ（CDNフォールバック） -->
 <script>
-// ===== ライブラリ読込（CDNフォールバック） =====
-async function loadScript(src){return new Promise((res,rej)=>{const s=document.createElement('script');s.src=src;s.defer=true;s.onload=()=>res(true);s.onerror=()=>rej(new Error('load fail: '+src));document.head.appendChild(s);});}
-async function ensureLibs(){
-  const pdfCDNs=["https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js","https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"];
-  const xlsxCDNs=["https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js","https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"];
-  let used=null; for(const u of pdfCDNs){try{await loadScript(u);if(window.pdfjsLib){used=u;break}}catch{}}
-  for(const u of xlsxCDNs){try{await loadScript(u);if(window.XLSX)break}catch{}}
-  if(!window.pdfjsLib) throw new Error("pdf.js 読込失敗"); if(!window.XLSX) throw new Error("xlsx 読込失敗");
+async function loadScript(src){return new Promise((res,rej)=>{const s=document.createElement('script');s.src=src;s.defer=true;s.onload=()=>res();s.onerror=()=>rej(new Error('load fail '+src));document.head.appendChild(s);});}
+(async()=>{
+  const pdfCDN=["https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js","https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"];
+  const xlsxCDN=["https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js","https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"];
+  let ok=false, used=null;
+  for(const u of pdfCDN){try{await loadScript(u); if(window.pdfjsLib){used=u; ok=true;break}}catch{}}
+  for(const u of xlsxCDN){try{await loadScript(u); if(window.XLSX)break}catch{}}
+  if(!ok||!window.XLSX){alert("ライブラリ読込失敗"); return}
   try{pdfjsLib.GlobalWorkerOptions.workerSrc=used.replace(/pdf\.min\.js$/,"pdf.worker.min.js")}catch{}
-}
-const statusEl=document.getElementById('status'), exportBtn=document.getElementById('exportBtn');
-const drop=document.getElementById('drop'), pdfInput=document.getElementById('pdfInput'), tbody=document.getElementById('tbody');
-let currentFile=null, lastLines=[];
+})();
+</script>
 
-(async()=>{try{statusEl.textContent="ライブラリ読込中…";await ensureLibs();statusEl.textContent="準備OK：PDFを選択してください"}catch(e){statusEl.textContent="初期化失敗: "+e.message}})();
+<script>
+/* ========= 状態 ========= */
+const state={
+  masterRows:[],          // {model, NR, SP, HNR}
+  masterIndex:new Map(),  // norm(model)->row
+  modelInputs:[],         // HTMLInputElement[]
+  matches:[]              // 表示用
+};
 
-// ===== D&D =====
-['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();e.stopPropagation();drop.classList.add('drag')}));
-['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();e.stopPropagation();drop.classList.remove('drag')}));
-drop.addEventListener('drop',e=>{e.preventDefault();e.stopPropagation();const f=[...e.dataTransfer.files].find(f=>/\.pdf$/i.test(f.name)); if(!f){statusEl.textContent="PDFではありません";return} handleFile(f)});
-drop.addEventListener('click',()=>pdfInput.click());
-pdfInput.addEventListener('change',()=>{const f=pdfInput.files?.[0]; if(!f){statusEl.textContent="未選択";return} if(!/\.pdf$/i.test(f.name)){statusEl.textContent="PDFを選択してください";return} handleFile(f)});
+/* ========= 要素 ========= */
+const masterInput=document.getElementById('masterInput');
+const masterStatus=document.getElementById('masterStatus');
+const downloadSample=document.getElementById('downloadSample');
 
-// ===== 共通ユーティリティ =====
+const pdfInput=document.getElementById('pdfInput');
+const drop=document.getElementById('drop');
+const pdfStatus=document.getElementById('pdfStatus');
+
+const modelsTbody=document.getElementById('modelsTbody');
+
+const showBtn=document.getElementById('showBtn');
+const exportCsv=document.getElementById('exportCsv');
+const resultStatus=document.getElementById('resultStatus');
+const resultTbody=document.getElementById('resultTbody');
+
+const mapList=document.getElementById('mapList');
+const mapCost=document.getElementById('mapCost');
+
+/* ========= 共通 ========= */
 function toHalfWidth(s){return String(s).replace(/[！-～]/g,ch=>String.fromCharCode(ch.charCodeAt(0)-0xFEE0)).replace(/　/g,' ')}
-function normalizeNumberGaps(s){s=s.replace(/\s+/g,' ').trim();for(let i=0;i<4;i++)s=s.replace(/(\d)\s*,\s*(\d{3})(?!\d)/g,'$1,$2');s=s.replace(/([¥￥])\s+/g,'$1');return s}
-function normLine(s){return normalizeNumberGaps(toHalfWidth(s||""))}
-function toInt(s){if(!s)return 0; s=normLine(String(s)).replace(/[¥￥,\s]/g,''); const n=Number(s); return isNaN(n)?0:n}
-function parseQtyToken(tok){const m=normLine(String(tok||'')).match(/^(\d+)\s*(式|個|台|本)?$/); if(m) return {qty:Number(m[1]), qUnit:m[2]||""}; const n=toInt(tok); return {qty:n||0,qUnit:""}}
+function normModel(s){
+  if(!s) return "";
+  let x=toHalfWidth(String(s)).toUpperCase().trim();
+  x=x.replace(/[\s\-_/]/g,''); // 余白・記号を除去
+  x=x.replace(/O/g,'0').replace(/[IL]/g,'1'); // ゆらぎ
+  return x;
+}
+function yen(n){ return (n==null||n==="")? "" : Number(n).toLocaleString('ja-JP') }
+function toH(s){return String(s??"").replace(/[&<>"]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m]))}
+async function copyText(text, btn){
+  try{
+    if(navigator.clipboard && window.isSecureContext){ await navigator.clipboard.writeText(text); }
+    else{ const ta=document.createElement('textarea'); ta.value=text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); }
+    if(btn){ btn.classList.add('copied'); const old=btn.textContent; btn.textContent='Copied!'; setTimeout(()=>{btn.classList.remove('copied'); btn.textContent=old;}, 1500); }
+  }catch(e){ if(btn){ btn.textContent='コピー失敗'; btn.disabled=true; } console.error(e); }
+}
+function makeCopyBtn(getter,label="コピー"){
+  const b=document.createElement('button'); b.className='copy-btn'; b.type='button'; b.textContent=label;
+  b.addEventListener('click',()=> copyText(getter(), b));
+  return b;
+}
+
+/* ========= サンプルCSV（NR/SP/HNR列あり） ========= */
+downloadSample.addEventListener('click', ()=>{
+  const csv = "型式,NR,SP,HNR\nMFC-S008,200000,187000,195000\nMFC-DP01,20000,16000,18000\nDPM-011H1-15F,650000,598000,620000\nC30-FH1-M5,80000,70000,76000\nDSP-UC-N,25000,20000,23000\n";
+  const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"})); a.download="価格マスタ_サンプル_NR_SP_HNR.csv"; a.click();
+});
+
+/* ========= 価格マスタ読込（NR/SP/HNR対応） ========= */
+masterInput.addEventListener('change', async ()=>{
+  const f=masterInput.files?.[0]; if(!f){ masterStatus.textContent="未読込"; return; }
+  try{
+    masterStatus.textContent="読込中…";
+    const buf=await f.arrayBuffer();
+    let rows=[];
+    if(/\.csv$/i.test(f.name)){
+      const txt=new TextDecoder('utf-8').decode(buf);
+      const lines=txt.split(/\r?\n/).filter(l=>l.trim().length>0);
+      const header=lines[0].split(',').map(h=>h.trim());
+      rows = lines.slice(1).map(l=>{
+        const cells=l.split(',');
+        const obj={}; header.forEach((h,i)=> obj[h]=cells[i]??"");
+        return obj;
+      });
+    }else{
+      const wb=XLSX.read(buf,{type:'array'}); const sh=wb.Sheets[wb.SheetNames[0]];
+      rows=XLSX.utils.sheet_to_json(sh,{defval:""});
+    }
+    if(!rows.length){ throw new Error("データ行がありません"); }
+
+    // 列推定（全角NR/SP/HNRも吸収）
+    const pick=(names)=> Object.keys(rows[0]||{}).find(h=> names.some(n=> new RegExp(n,'i').test(String(h).replace(/[！-～]/g,ch=>String.fromCharCode(ch.charCodeAt(0)-0xFEE0)))));
+    const modelCol = pick(["型式","品番","型番","Model","Part"]);
+    const nrCol    = pick(["NR","定価","上代","標準価格","List"]);
+    const spCol    = pick(["SP","仕入","仕切","原価","Cost","買価格"]);
+    const hnrCol   = pick(["HNR"]);
+
+    if(!modelCol) throw new Error("型式列が見つかりません（例：型式/品番）");
+
+    state.masterRows = rows.map(r=>{
+      const parseN = (v)=> Number(String(v??"").replace(/[^\d.-]/g,''))||0;
+      return {
+        model: String(r[modelCol]||"").trim(),
+        NR:  nrCol  ? parseN(r[nrCol])  : 0,
+        SP:  spCol  ? parseN(r[spCol])  : 0,
+        HNR: hnrCol ? parseN(r[hnrCol]) : 0
+      };
+    }).filter(r=>r.model);
+
+    // インデックス
+    state.masterIndex.clear();
+    for(const r of state.masterRows){ state.masterIndex.set(normModel(r.model), r); }
+
+    masterStatus.textContent = `読込OK：${state.masterRows.length}件（列: ${nrCol?'NR':''}${spCol?'/SP':''}${hnrCol?'/HNR':''})`;
+    updateShowButtonState();
+  }catch(e){
+    console.error(e);
+    masterStatus.textContent="読込失敗: "+e.message;
+  }
+});
+
+/* ========= PDF → 型式抽出 & 編集 ========= */
+['dragenter','dragover'].forEach(ev=> drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('drag')}));
+['dragleave','drop'].forEach(ev=> drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('drag')}));
+drop.addEventListener('click',()=> pdfInput.click());
+drop.addEventListener('drop', e=>{
+  e.preventDefault(); drop.classList.remove('drag');
+  const f=[...e.dataTransfer.files].find(f=>/\.pdf$/i.test(f.name)); if(f) loadPdf(f);
+});
+pdfInput.addEventListener('change', ()=>{ const f=pdfInput.files?.[0]; if(f) loadPdf(f); });
+
+async function loadPdf(f){
+  if(!window.pdfjsLib){ alert("pdf.js 未ロード"); return; }
+  pdfStatus.textContent="読込中…";
+  try{
+    const buf=await f.arrayBuffer();
+    const pdf=await pdfjsLib.getDocument({data:buf}).promise;
+
+    // テキスト行を上→下で再構成
+    let lines=[];
+    for(let p=1;p<=pdf.numPages;p++){
+      const page=await pdf.getPage(p);
+      const c=await page.getTextContent();
+      lines=lines.concat(rebuildLines(c.items));
+    }
+
+    // 型式候補抽出（英数＋-_/ を含む3文字以上のトークン）
+    const models = extractModels(lines);
+    renderModelInputs(models);
+
+    pdfStatus.textContent=`抽出: ${models.length} 件`;
+    updateShowButtonState();
+  }catch(e){
+    console.error(e);
+    pdfStatus.textContent="読込失敗: "+e.message;
+  }
+}
+
 function rebuildLines(items){
   const tol=2, pts=items.map(it=>({x:it.transform[4],y:it.transform[5],s: toHalfWidth(it.str)}));
+  // y降順→x昇順で並べて行にまとめ、最後に反転して上→下へ
   pts.sort((a,b)=> (Math.abs(b.y-a.y)>tol?b.y-a.y:a.x-b.x));
   let curY=null,buf=[],rows=[];
   for(const p of pts){
     if(curY===null||Math.abs(p.y-curY)<=tol){curY=curY??p.y;buf.push(p)}
-    else{buf.sort((a,b)=>a.x-b.x);rows.push(normalizeNumberGaps(buf.map(x=>x.s).join(' ').replace(/\s{2,}/g,' ').trim()));curY=p.y;buf=[p]}
-  }
-  if(buf.length){buf.sort((a,b)=>a.x-b.x);rows.push(normalizeNumberGaps(buf.map(x=>x.s).join(' ').replace(/\s{2,}/g,' ').trim()))}
-  rows.reverse(); return rows.filter(Boolean)
-}
-function addRow(it){
-  const tr=document.createElement('tr');
-  tr.innerHTML=`<td><input type="text" value="${it.name||''}"></td>
-  <td><input type="text" value="${it.model||''}"></td>
-  <td class="right"><input type="number" value="${it.qty||0}"></td>
-  <td><input type="text" value="${it.qUnit||''}"></td>
-  <td class="right"><input type="number" value="${it.unit||0}"></td>
-  <td class="right"><input type="number" value="${it.amount||0}"></td>`;
-  tbody.appendChild(tr);
-}
-function ensureAtLeastOneRow(){ if(!tbody.querySelector('tr')) addRow({name:"",model:"",qty:0,qUnit:"",unit:0,amount:0})}
-
-// ===== 抽出ロジック（実働） =====
-function pickPricesFromLine(s){const nums=[];const re=/[¥￥]?\s*\-?\d{1,3}(?:,\d{3})*(?:\.\d+)?/g;let m;while((m=re.exec(s))) nums.push(toInt(m[0])); const f=nums.filter(n=>n!==0); if(f.length>=2) return {unit:f[f.length-2],amount:f[f.length-1]}; if(f.length===1) return {unit:f[0],amount:f[0]}; return {unit:0,amount:0}}
-function splitNameModel(desc){const s=normLine(desc||""); const toks=s.split(' '); const looks=(t)=>/[A-Za-z]/.test(t)&&/[0-9A-Za-z\-]/.test(t); if(toks.length>=2&&looks(toks[toks.length-1])) return [toks.slice(0,-1).join(' '),toks[toks.length-1]]; const m=s.match(/^([A-Za-z0-9][A-Za-z0-9\-]+)\s*(.+)$/); if(m) return [m[2],m[1]]; return [s,""]}
-function parseItems(lines){
-  const rows=lines.map((raw,i)=>({i,s:normLine(raw||"")}));
-  const labeled=/^\s*(\d+)\s*\(品名\)\s*(.+?)\s*\(型式\)\s*([^\s]+)\s*\(数量\)\s*(\d+)\s*([^\s]+)\s*\(仕切\)\s*([¥￥]?\s*\-?\d{1,3}(?:,\d{3})*(?:\.\d+)?)\s*(?:\((?:金額)?\)\s*([¥￥]?\s*\-?\d{1,3}(?:,\d{3})*(?:\.\d+)?)\s*)?$/;
-  const num=/^(\d+)\s+(\d+(?:\s*(?:式|個|台|本))?)\b.*$/;
-  const lump=/^(\d+)\s*([¥￥]?\s*\-?\d{1,3}(?:,\d{3})*(?:\.\d+)?)(.*)$/;
-  const skip=/^(合\s*計|小\s*計|税|備考|納\s*期|有\s*効|お\s*支\s*払|御\s*見\s*積|見\s*積\s*書|項\s*目|品\s*名|型\s*式)/;
-
-  const kinds=rows.map(r=>{
-    if(labeled.test(r.s)) return {...r,kind:'labeled'};
-    if(num.test(r.s))     return {...r,kind:'num'};
-    if(lump.test(r.s))    return {...r,kind:'lump'};
-    if(skip.test(r.s))    return {...r,kind:'skip'};
-    return {...r,kind:'desc'};
-  });
-
-  const items=[];
-  for(const r of kinds){
-    if(r.kind!=='labeled') continue;
-    const m=r.s.match(labeled);
-    const idx=Number(m[1]), name=m[2].trim(), model=m[3].trim(), qty=Number(m[4])||0, qUnit=(m[5]||"").trim();
-    const unit=toInt(m[6]); const amtRaw=m[7]; const amount=amtRaw?toInt(amtRaw):(qty*unit);
-    items.push({idx,name,model,qty,qUnit,unit,amount,isLump:false});
-  }
-
-  const used=new Set();
-  function nearestDesc(pos){
-    const N=kinds.length;
-    for(let r=1;r<=8;r++){
-      const L=pos-r,R=pos+r;
-      if(L>=0 && kinds[L].kind==='desc' && !used.has(L)){used.add(L);return kinds[L].s}
-      if(R<N && kinds[R].kind==='desc' && !used.has(R)){used.add(R);return kinds[R].s}
+    else{
+      buf.sort((a,b)=>a.x-b.x);
+      const joined=buf.map(x=>x.s).join(' ').replace(/\s{2,}/g,' ').trim();
+      rows.push(joined);
+      curY=p.y;buf=[p];
     }
-    return "";
   }
-
-  for(const r of kinds){
-    if(r.kind!=='num') continue;
-    const idxNum=Number(r.s.match(num)[1]);
-    if(items.find(it=>it.idx===idxNum)) continue;
-    const m=r.s.match(num);
-    const idx=Number(m[1]); const {qty,qUnit}=parseQtyToken(m[2]);
-    const {unit,amount}=pickPricesFromLine(r.s);
-    const desc=nearestDesc(r.i); const [name,model]=splitNameModel(desc);
-    items.push({idx,name,model,qty,qUnit,unit,amount:(amount||qty*unit),isLump:false});
+  if(buf.length){ buf.sort((a,b)=>a.x-b.x); rows.push(buf.map(x=>x.s).join(' ').replace(/\s{2,}/g,' ').trim()); }
+  rows.reverse();
+  return rows.filter(Boolean);
+}
+function extractModels(lines){
+  const set=new Set();
+  const re=/[A-Za-z0-9][A-Za-z0-9\-_/]*[A-Za-z0-9]/g;
+  const ban=/^(FAX|TEL|DATE|QTY|PCS|PDF|NO|JAN|CODE|MODEL)$/i;
+  for(const line of lines){
+    const s=toHalfWidth(line);
+    const toks = s.match(re) || [];
+    for(const t of toks){
+      if(t.length<3) continue;
+      if(ban.test(t)) continue;
+      set.add(t);
+    }
   }
-
-  for(const r of kinds){
-    if(r.kind!=='lump') continue;
-    const m=r.s.match(lump); const idx=Number(m[1]);
-    if(items.find(it=>it.idx===idx)) continue;
-    const amt=toInt(m[2]); const desc=normLine(m[3]||""); if(!desc) continue;
-    const [name,model]=splitNameModel(desc);
-    items.push({idx,name,model,qty:1,qUnit:"式",unit:0,amount:amt,isLump:true});
-  }
-  items.sort((a,b)=>a.idx-b.idx);
-  return items;
+  return [...set];
+}
+function renderModelInputs(models){
+  modelsTbody.innerHTML='';
+  state.modelInputs = models.map((m,i)=>{
+    const tr=document.createElement('tr');
+    const tdNo=document.createElement('td'); tdNo.textContent=String(i+1);
+    const tdIn=document.createElement('td');
+    const inp=document.createElement('input'); inp.className='editable mono'; inp.value=m;
+    inp.addEventListener('input', updateShowButtonState);
+    tdIn.appendChild(inp);
+    tr.appendChild(tdNo); tr.appendChild(tdIn);
+    modelsTbody.appendChild(tr);
+    return inp;
+  });
 }
 
-// ===== ファイル処理 =====
-async function handleFile(f){
-  currentFile=f; exportBtn.disabled=false; tbody.innerHTML=''; ensureAtLeastOneRow();
-  statusEl.textContent=`読み込み中: ${f.name}`;
-  try{
-    const buf=await f.arrayBuffer();
-    const pdf=await pdfjsLib.getDocument({data:buf}).promise;
-    let lines=[]; for(let p=1;p<=pdf.numPages;p++){ const page=await pdf.getPage(p); const c=await page.getTextContent(); lines=lines.concat(rebuildLines(c.items)) }
-    lastLines=lines.slice();
-    const items=parseItems(lines);
-    if(items.length>0){ tbody.innerHTML=''; items.forEach(addRow) }
-    statusEl.textContent=`解析完了: ${items.length} 行`;
-  }catch(e){ console.error(e); statusEl.textContent="解析失敗: "+(e.message||e) } finally { exportBtn.disabled=false; ensureAtLeastOneRow() }
+/* ========= 見積表示（NR/SP/HNRを表示＋コピー） ========= */
+function updateShowButtonState(){
+  const okMaster = state.masterRows.length>0;
+  const okModels = state.modelInputs.length>0;
+  showBtn.disabled = !(okMaster && okModels);
+  exportCsv.disabled = true;
+  resultStatus.textContent = showBtn.disabled ? "マスタと型式が必要です" : "見積表示を押してください";
 }
-
-// ===== Excel出力（明細 / Raw / 見積書取込(国内)_レイアウト (2)） =====
-exportBtn.addEventListener('click',()=>{
-  try{
-    if(!window.XLSX) throw new Error("xlsx.js 未読込");
-    // 画面の値（手修正反映）
-    const uiItems=[...tbody.querySelectorAll('tr')].map(tr=>{
-      const t=tr.querySelectorAll('td input');
-      return {name:t[0].value.trim(),model:t[1].value.trim(),qty:Number(t[2].value)||0,qUnit:t[3].value.trim(),unit:(t[4].value===""?"":Number(t[4].value)||0),amount:Number(t[5].value)||0};
+showBtn.addEventListener('click', ()=>{
+  const models = state.modelInputs.map((inp,i)=>({idx:i+1, pdfModel: inp.value.trim()})).filter(x=>x.pdfModel);
+  const rows=[];
+  for(const it of models){
+    const key=normModel(it.pdfModel);
+    const row = state.masterIndex.get(key);
+    rows.push({
+      idx: it.idx,
+      pdfModel: it.pdfModel,
+      masterModel: row?.model || "",
+      NR: row?.NR || 0,
+      SP: row?.SP || 0,
+      HNR: row?.HNR || 0,
+      ok: !!row
     });
-
-    const wb=XLSX.utils.book_new();
-
-    // 1) 明細
-    const detailRows=uiItems.map(it=>{const nm=[it.name,it.model].filter(Boolean).join(' '); const unit=(it.unit===""?"":(Number(it.unit)||0)); return [nm,it.qty||0,unit,it.amount||0]});
-    const wsDetail=XLSX.utils.aoa_to_sheet([["","","",""],...detailRows]); wsDetail['!cols']=[{wch:40},{wch:8},{wch:12},{wch:12}];
-    XLSX.utils.book_append_sheet(wb,wsDetail,"明細");
-
-    // 2) Raw（上→下）
-    const rawAoa=[["#","line"],...lastLines.slice().reverse().map((s,i)=>[i+1,s])];
-    const wsRaw=XLSX.utils.aoa_to_sheet(rawAoa); wsRaw['!cols']=[{wch:6},{wch:100}];
-    XLSX.utils.book_append_sheet(wb,wsRaw,"Raw");
-
-    // 3) 見積書取込(国内)_レイアウト (2)
-const header=Array(22).fill("");
-header[1]="品名・仕様"; header[13]="単価"; header[16]="金額"; header[20]="率"; header[21]="買価格";
-const layout=[header];
-uiItems.forEach((it,i)=>{
-  const row=Array(22).fill("");
-  const nm=[it.name,it.model].filter(Boolean).join(' ');
-  const unit=(it.unit===""?"":(Number(it.unit)||0));
-  const amount=it.amount||0;
-  row[0]=i+1;           // A: 行番号
-  row[1]=nm;            // B: 品名・仕様（後で B-K を結合）
-  row[13]=unit===""?"":unit; // N: 単価
-  row[16]=amount;       // Q: 金額
-  row[21]=unit===""?amount:unit; // V: 買価格
-  layout.push(row);
+  }
+  state.matches = rows;
+  renderResults(rows);
 });
-const wsLayout=XLSX.utils.aoa_to_sheet(layout);
+function renderResults(rows){
+  resultTbody.innerHTML='';
+  if(!rows.length){ resultStatus.textContent="型式がありません"; return; }
+  resultStatus.textContent = "結果を表示しました。未一致は候補から選択してください。";
+  // 候補（先頭200件）
+  const masterOptions = state.masterRows.slice(0, 200).map(r=>r.model);
 
-// 列幅
-wsLayout['!cols']=Array.from({length:22},(_,i)=> 
-  i===1?{wch:40}:(i===0?{wch:6}:(i===13||i===16||i===21?{wch:12}:{wch:8}))
-);
+  rows.forEach((r)=>{
+    const tr=document.createElement('tr');
 
-// ★ B-K を結合する設定を追加 ★
-const merges=[];
-for(let r=1; r<=layout.length; r++){
-  merges.push({s:{r:r,c:1}, e:{r:r,c:10}}); // row=r, col=1(B) ～ col=10(K)
+    // 型式（表示+コピー）
+    const tdPdf=document.createElement('td');
+    const pdfSpan=document.createElement('span'); pdfSpan.textContent=r.pdfModel; pdfSpan.className='mono';
+    const btnCopyPdf = makeCopyBtn(()=> r.pdfModel, "コピー");
+    const wrapPdf=document.createElement('div'); wrapPdf.className='cell-flex'; wrapPdf.append(pdfSpan, btnCopyPdf);
+
+    // マスタ型式の候補セレクト
+    const tdSel=document.createElement('td');
+    const sel=document.createElement('select');
+    const defaultOpt=document.createElement('option');
+    defaultOpt.value=""; defaultOpt.textContent = r.masterModel ? r.masterModel : "（候補を選択）";
+    sel.appendChild(defaultOpt);
+    masterOptions.forEach(m=>{
+      const o=document.createElement('option'); o.value=m; o.textContent=m; sel.appendChild(o);
+    });
+    sel.addEventListener('change', ()=>{
+      const model=sel.value;
+      if(!model) return;
+      const row = state.masterRows.find(x=>x.model===model);
+      if(row){
+        r.masterModel=row.model; r.NR=row.NR; r.SP=row.SP; r.HNR=row.HNR; r.ok=true;
+        renderResults(state.matches); // 再描画
+      }
+    });
+    tdSel.appendChild(sel);
+
+    // 各価格（表示+コピー）
+    const tdNR=document.createElement('td'); tdNR.className='right';
+    const nrStr = r.NR ? r.NR.toLocaleString('ja-JP') : "";
+    const wrapNR=document.createElement('div'); wrapNR.className='cell-flex end';
+    wrapNR.append(Object.assign(document.createElement('span'),{textContent:nrStr,className:'mono'}), makeCopyBtn(()=> nrStr));
+    tdNR.appendChild(wrapNR);
+
+    const tdSP=document.createElement('td'); tdSP.className='right';
+    const spStr = r.SP ? r.SP.toLocaleString('ja-JP') : "";
+    const wrapSP=document.createElement('div'); wrapSP.className='cell-flex end';
+    wrapSP.append(Object.assign(document.createElement('span'),{textContent:spStr,className:'mono'}), makeCopyBtn(()=> spStr));
+    tdSP.appendChild(wrapSP);
+
+    const tdHNR=document.createElement('td'); tdHNR.className='right';
+    const hnrStr = r.HNR ? r.HNR.toLocaleString('ja-JP') : "";
+    const wrapHNR=document.createElement('div'); wrapHNR.className='cell-flex end';
+    wrapHNR.append(Object.assign(document.createElement('span'),{textContent:hnrStr,className:'mono'}), makeCopyBtn(()=> hnrStr));
+    tdHNR.appendChild(wrapHNR);
+
+    // 状態
+    const tdState=document.createElement('td'); tdState.innerHTML = r.ok?'<span class="ok">一致</span>':'<span class="warn">未一致</span>';
+
+    tr.appendChild(Object.assign(document.createElement('td'),{textContent:String(r.idx)}));
+    tr.appendChild(tdPdf);
+    tr.appendChild(tdSel);
+    tr.appendChild(tdNR);
+    tr.appendChild(tdSP);
+    tr.appendChild(tdHNR);
+    tr.appendChild(tdState);
+    tr.children[1].appendChild(wrapPdf);
+
+    resultTbody.appendChild(tr);
+  });
+  exportCsv.disabled=false;
 }
-wsLayout['!merges']=merges;
 
-XLSX.utils.book_append_sheet(wb,wsLayout,"見積書取込(国内)_レイアウト (2)");
-
-    const name=(currentFile?.name?.replace(/\.pdf$/i,'')||"converted")+"_同フォーマット.xlsx";
-    XLSX.writeFile(wb,name);
-    statusEl.textContent="Excel出力 完了: "+name;
-  }catch(e){ console.error(e); statusEl.textContent="Excel出力失敗: "+(e.message||e) }
+/* ========= CSV出力（マッピング選択に従う / 併せてNR,SP,HNRも出力） ========= */
+exportCsv.addEventListener('click', ()=>{
+  const mapL = mapList.value; // 定価に使う列
+  const mapC = mapCost.value; // 仕入に使う列
+  const header=["No","型式(PDF/編集)","マスタ型式","NR","SP","HNR","定価("+mapL+")","仕入("+mapC+")"];
+  const lines=[header.join(",")];
+  state.matches.forEach(r=>{
+    const list = (r[mapL]??0);
+    const cost = (r[mapC]??0);
+    lines.push([
+      r.idx,
+      `"${r.pdfModel}"`,
+      `"${r.masterModel}"`,
+      r.NR, r.SP, r.HNR,
+      list, cost
+    ].join(","));
+  });
+  const blob=new Blob([lines.join("\n")],{type:"text/csv"});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download="価格表示_NR_SP_HNR.csv"; a.click();
 });
 </script>
 </body>
