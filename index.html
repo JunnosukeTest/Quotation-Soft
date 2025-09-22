@@ -1,430 +1,554 @@
-<!doctype html>
-<html lang="ja">
-  <head>
-    <meta charset="UTF-8" />
-    <title>価格表示ツール（SP版・単一HTML）</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <!-- 簡易スタイル（依存なし） -->
-    <style>
-      :root {
-        --emerald-50: #ecfdf5;
-        --emerald-200: #a7f3d0;
-        --emerald-700: #047857;
-        --emerald-800: #065f46;
-        --orange-50: #fff7ed;
-        --red-200: #fecaca;
-        --red-700: #b91c1c;
-        --gray-200: #e5e7eb;
-        --gray-400: #9ca3af;
-      }
-      body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji"; background:#fff; color:#111; }
-      .container { max-width: 960px; margin: 0 auto; padding: 24px; }
-      h1 { color: var(--emerald-800); }
-      section, .card { border: 1px solid var(--emerald-200); border-radius: 12px; padding: 16px; margin-bottom: 16px; background: #fff; }
-      .title { margin: 0 0 8px; color: var(--emerald-800); }
-      .row { display:flex; gap:8px; align-items:center; }
-      .row-right { margin-left:auto; }
-      .btn { padding: 6px 10px; border-radius: 6px; cursor:pointer; }
-      .btn-primary { background:#059669; color:#fff; border:none; }
-      .btn-ghost { background:#fff; color:var(--emerald-700); border:1px solid var(--emerald-200); }
-      .btn-danger { background:#fff; color:var(--red-700); border:1px solid var(--red-200); }
-      .drop { border:2px dashed var(--emerald-200); border-radius:16px; padding:16px; text-align:center; cursor:pointer; background:#fff; }
-      .hint { color: var(--emerald-700); font-size:12px; }
-      table { width:100%; border-collapse:collapse; }
-      thead { background: var(--emerald-50); color: var(--emerald-800); }
-      th, td { text-align:left; padding: 6px 8px; border-bottom: 1px solid var(--gray-200); vertical-align: top; }
-      .muted { color: var(--gray-400); }
-      .warn-row { background: var(--orange-50); }
-      input[type="text"] { width:100%; padding:6px; border:1px solid #d1d5db; border-radius:6px; }
-      .copy { margin-left:8px; border:1px solid var(--emerald-200); color:var(--emerald-700); background: var(--emerald-50); padding:4px 8px; border-radius:6px; }
-      .toast { position: fixed; top: 16px; right: 16px; background: #111; color:#fff; padding:10px 12px; border-radius:8px; opacity:0.96; z-index:9999; }
-    </style>
+import React, { useCallback, useMemo, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { toast } from "sonner";
+import Papa from "papaparse";
+import * as pdfjsLib from "pdfjs-dist";
+import "pdfjs-dist/build/pdf.worker.mjs";
 
-    <!-- React / ReactDOM / Babel（CDN: ビルド不要で JSX が動く） -->
-    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
-    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
+// ---- Helpers ----
+const jpYen = (n) => {
+  const num = parseFloat(String(n ?? "").toString().replace(/[^0-9.-]/g, ""));
+  if (isNaN(num)) return "";
+  return new Intl.NumberFormat("ja-JP").format(num); // 単位は付けない
+};
 
-    <!-- Papa Parse（CSV） -->
-    <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+// ()内注記を無視した型式に整形
+const stripParen = (s) => String(s ?? "").replace(/\([^)]*\)/g, "").trim();
 
-    <!-- PDF.js（本体 & ワーカーはCDNに設定） -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-    <script>
-      // PDF.js の worker を CDN に向ける（bundler 不要で確実に動作）
-      pdfjsLib.GlobalWorkerOptions.workerSrc =
-        "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-    </script>
-  </head>
+// ノイズ判定: TNHS-*, TEL*, FAX*, DSP3000, PC*, UL*, COM*
+const isNoise = (s) => /^(TNHS-|TEL|FAX|PC|UL|COM)/i.test(String(s).trim()) || /^DSP3000$/i.test(String(s).trim());
 
-  <body>
-    <div class="container">
-      <div id="root"></div>
+// 型式抽出: 先頭が大文字アルファベット以外、カタカナ（全角/半角）を含むものは除外
+const isValidModel = (s) => {
+  const base = stripParen(s);
+  if (!/^[A-Z]/.test(base)) return false; // 半角英大文字で開始
+  // 全角カタカナ: [ァ-ヶー]、半角カタカナ: [ｦ-ﾟ]
+  if (/[ァ-ヶー]/.test(base) || /[ｦ-ﾟ]/.test(base)) return false;
+  return true; // 半角数字はOK
+};
+
+// キー正規化（大文字化・ハイフン/空白除去・()内削除）
+const normalizeKey = (s) => stripParen(s).toUpperCase().replace(/[-\s]/g, "");
+
+const parseModelList = (text) => {
+  if (!text) return [];
+  // 同一型式も“すべて”残す（重複除去しない）
+  return text
+    .split(/[\n,;\t\s]+/)
+    .map((x) => stripParen(x))
+    .map((x) => x.trim())
+    .filter((x) => Boolean(x) && !isNoise(x) && isValidModel(x));
+};
+
+// クリップボード安全コピー（Permissions-Policyや非HTTPSでもフォールバック）
+async function safeCopy(text) {
+  const val = String(text ?? "");
+  try {
+    if (typeof navigator !== "undefined" && navigator.clipboard && typeof window !== "undefined" && window.isSecureContext) {
+      await navigator.clipboard.writeText(val);
+      return true;
+    }
+  } catch (_) {}
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = val;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.top = "-1000px";
+    ta.style.left = "-1000px";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    ta.setSelectionRange(0, ta.value.length);
+    const ok = document.execCommand && document.execCommand("copy");
+    document.body.removeChild(ta);
+    return !!ok;
+  } catch (_) {
+    return false;
+  }
+}
+
+function useSpCsvMap() {
+  const [map, setMap] = useState(null);
+  const [meta, setMeta] = useState(null);
+
+  const load = useCallback(async (file) => {
+    return new Promise((resolve, reject) => {
+      Papa.parse(file, {
+        header: false,
+        skipEmptyLines: true,
+        complete: (res) => {
+          const rows = res.data;
+          const m = new Map();
+          let kept = 0;
+
+          for (const row of rows) {
+            const rawModel = row?.[0];
+            const listPrice = row?.[1] ?? "";
+            const cost = row?.[2] ?? "";
+            if (!rawModel) continue;
+
+            const model = stripParen(rawModel);
+            if (isNoise(model) || !isValidModel(model)) continue;
+
+            const key = normalizeKey(model);
+            const entry = m.get(key) || { model: String(model).trim(), variants: [] };
+
+            // 同一金額ペア重複を避け、最大2件まで保持
+            const sig = String(listPrice) + "|||" + String(cost);
+            const hasSame = entry.variants.some((v) => (String(v.listPrice) + "|||" + String(v.cost)) === sig);
+            if (!hasSame && entry.variants.length < 2) {
+              entry.variants.push({ listPrice, cost });
+            }
+            m.set(key, entry);
+            kept++;
+          }
+
+          setMap(m);
+          setMeta({ rows: rows.length, kept, uniqueKeys: m.size, fileName: file.name });
+          resolve(m);
+        },
+        error: (err) => reject(err),
+        encoding: "UTF-8",
+      });
+    });
+  }, []);
+
+  return { map, meta, load };
+}
+
+async function extractTextFromPdf(file) {
+  try {
+    const buf = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+    let text = "";
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      text += content.items.map((it) => (it.str ? it.str + "\n" : "")).join("");
+    }
+    return text.trim();
+  } catch (e) {
+    console.error(e);
+    throw e;
+  }
+}
+
+function CopyBtn({ value }) {
+  const handleCopy = useCallback(async () => {
+    const ok = await safeCopy(value);
+    if (ok) {
+      toast.success("コピーしました");
+    } else {
+      toast.error("コピーできませんでした（ブラウザの制限）");
+    }
+  }, [value]);
+
+  return (
+    <Button
+      type="button"
+      variant="secondary"
+      className="ml-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200"
+      onClick={handleCopy}
+    >
+      コピー
+    </Button>
+  );
+}
+
+function DropZone({ onFiles, accept = "*", label = "ここにファイルをドロップ / クリックで選択" }) {
+  const inputRef = useRef(null);
+  const onDrop = useCallback(
+    (e) => {
+      e.preventDefault();
+      const files = e.dataTransfer.files;
+      if (files && files.length) onFiles(Array.from(files));
+    },
+    [onFiles]
+  );
+
+  return (
+    <div
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={onDrop}
+      onClick={() => inputRef.current?.click()}
+      className="w-full border-2 border-dashed rounded-2xl p-6 text-center cursor-pointer bg-white hover:bg-emerald-50 border-emerald-300"
+    >
+      <p className="text-sm text-emerald-700">{label}</p>
+      <input
+        ref={inputRef}
+        type="file"
+        accept={accept}
+        className="hidden"
+        onChange={(e) => onFiles(Array.from(e.target.files || []))}
+      />
     </div>
+  );
+}
 
-    <!-- アプリ本体（Babelで JSX を変換） -->
-    <script type="text/babel">
-      const { useCallback, useMemo, useRef, useState } = React;
+function genId(prefix = "ROW") {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
 
-      // ---- 小さなトースト（依存なし） ----
-      function toast(msg) {
-        const el = document.createElement('div');
-        el.className = 'toast';
-        el.textContent = msg;
-        document.body.appendChild(el);
-        setTimeout(() => { el.remove(); }, 1800);
-      }
+export default function App() {
+  const { map: spMap, meta: spMeta, load: loadSp } = useSpCsvMap();
+  const [pdfText, setPdfText] = useState("");
+  const [loadingPdf, setLoadingPdf] = useState(false);
+  const [rows, setRows] = useState([]); // 表示用フラット行
+  const [inplaceEdit, setInplaceEdit] = useState(false); // テーブル直接編集モード
 
-      // ---- Helpers ----
-      const jpYen = (n) => {
-        const num = parseFloat(String(n ?? "").toString().replace(/[^0-9.-]/g, ""));
-        if (isNaN(num)) return "";
-        return new Intl.NumberFormat("ja-JP").format(num); // 単位は付けない
-      };
-      const stripParen = (s) => String(s ?? "").replace(/\([^)]*\)/g, "").trim();
-      const isNoise = (s) =>
-        /^(TNHS-|TEL|FAX|PC|UL|COM)/i.test(String(s).trim()) || /^DSP3000$/i.test(String(s).trim());
-      const isValidModel = (s) => {
-        const base = stripParen(s);
-        if (!/^[A-Z]/.test(base)) return false;
-        if (/[ァ-ヶー]/.test(base) || /[ｦ-ﾟ]/.test(base)) return false;
-        return true;
-      };
-      const normalizeKey = (s) => stripParen(s).toUpperCase().replace(/[-\s]/g, "");
-      const parseModelList = (text) => {
-        if (!text) return [];
-        return text
-          .split(/[\n,;\t\s]+/)
-          .map((x) => stripParen(x))
-          .map((x) => x.trim())
-          .filter((x) => Boolean(x) && !isNoise(x) && isValidModel(x));
-      };
+  // ---- Priority helpers ----
+  // 2: PDF -> rows を生成（CSV(1) があれば価格埋め）
+  const buildRowsFromModels = useCallback(
+    (modelList) => {
+      return modelList.flatMap((m, occIdx) => {
+        const key = normalizeKey(m);
+        const hit = spMap ? spMap.get(key) : null;
+        const variants = hit?.variants?.length ? hit.variants.slice(0, 2) : [{ listPrice: "", cost: "" }];
+        return variants.map((v, i) => ({
+          id: `${key}-${occIdx}-${i}`,
+          model: hit?.model || stripParen(m),
+          listPrice: v.listPrice,
+          cost: v.cost,
+          found: Boolean(hit),
+          note: hit ? "一致（SP）" : "未一致",
+          show: true,
+          variantIndex: i,
+        }));
+      });
+    },
+    [spMap]
+  );
 
-      async function safeCopy(text) {
-        const val = String(text ?? "");
-        try {
-          if (navigator.clipboard && window.isSecureContext) {
-            await navigator.clipboard.writeText(val);
-            return true;
-          }
-        } catch {}
-        try {
-          const ta = document.createElement("textarea");
-          ta.value = val;
-          ta.setAttribute("readonly", "");
-          ta.style.position = "fixed";
-          ta.style.top = "-1000px";
-          ta.style.left = "-1000px";
-          document.body.appendChild(ta);
-          ta.focus();
-          ta.select();
-          ta.setSelectionRange(0, ta.value.length);
-          const ok = document.execCommand && document.execCommand("copy");
-          document.body.removeChild(ta);
-          return !!ok;
-        } catch {
-          return false;
+  // 1: CSV -> 既存行の価格を再解決（型式は保持／手入力を優先）
+  const resolvePricesFromCsv = useCallback(
+    (prevRows) => {
+      if (!spMap) return prevRows;
+      return prevRows.map((r) => {
+        const key = normalizeKey(r.model || "");
+        const hit = key ? spMap.get(key) : null;
+        if (hit?.variants?.length) {
+          const vi = Number.isInteger(r?.variantIndex) ? r.variantIndex : 0;
+          const v = hit.variants[vi] || hit.variants[0];
+          return { ...r, listPrice: v.listPrice, cost: v.cost, found: true, note: "一致（SP）" };
         }
+        return { ...r, found: false, note: "未一致" };
+      });
+    },
+    [spMap]
+  );
+
+  const handleLoadSpCsv = useCallback(
+    async (files) => {
+      if (!files?.length) return;
+      const file = files[0];
+      if (!file.name.toLowerCase().endsWith(".csv")) return toast.error("CSVファイルを選択してください");
+      try {
+        await loadSp(file);
+        toast.success("SP 価格マスタを読み込みました");
+        // 1優先: 既存見積があれば価格だけ再解決
+        setRows((prev) => resolvePricesFromCsv(prev));
+      } catch (e) {
+        console.error(e);
+        toast.error("CSVの読み込みに失敗しました");
       }
+    },
+    [loadSp, resolvePricesFromCsv]
+  );
 
-      function useSpCsvMap() {
-        const [map, setMap] = useState(null);
-        const [meta, setMeta] = useState(null);
-
-        const load = useCallback(async (file) => {
-          return new Promise((resolve, reject) => {
-            Papa.parse(file, {
-              header: false,
-              skipEmptyLines: true,
-              complete: (res) => {
-                const rows = res.data;
-                const m = new Map();
-                let kept = 0;
-
-                for (const row of rows) {
-                  const rawModel = row?.[0];
-                  const listPrice = row?.[1] ?? "";
-                  const cost = row?.[2] ?? "";
-                  if (!rawModel) continue;
-
-                  const model = stripParen(rawModel);
-                  if (isNoise(model) || !isValidModel(model)) continue;
-
-                  const key = normalizeKey(model);
-                  const entry = m.get(key) || { model: String(model).trim(), variants: [] };
-
-                  const sig = String(listPrice) + "|||" + String(cost);
-                  const hasSame = entry.variants.some((v) => (String(v.listPrice) + "|||" + String(v.cost)) === sig);
-                  if (!hasSame && entry.variants.length < 2) {
-                    entry.variants.push({ listPrice, cost });
-                  }
-                  m.set(key, entry);
-                  kept++;
-                }
-
-                setMap(m);
-                setMeta({ rows: rows.length, kept, uniqueKeys: m.size, fileName: file.name });
-                resolve(m);
-              },
-              error: (err) => reject(err),
-              encoding: "UTF-8",
-            });
-          });
-        }, []);
-
-        return { map, meta, load };
+  const handlePdfDrop = useCallback(async (files) => {
+    if (!files?.length) return;
+    const file = files[0];
+    if (!(file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"))) return toast.error("PDFファイルを選択してください");
+    setLoadingPdf(true);
+    try {
+      const text = await extractTextFromPdf(file);
+      if (!text) toast.error("画像ベースのため表示エラー");
+      setPdfText(text || "");
+      if (text) {
+        // 2優先: 既存見積があっても PDF 由来で置き換え → 3(編集)へ
+        const nextModels = parseModelList(text);
+        const nextRows = buildRowsFromModels(nextModels);
+        setRows(nextRows);
+        setInplaceEdit(true);
+        toast.message("PDFを優先して見積表を更新しました（2→3）");
       }
+    } catch (e) {
+      toast.error("PDF抽出に失敗しました");
+    } finally {
+      setLoadingPdf(false);
+    }
+  }, [buildRowsFromModels]);
 
-      async function extractTextFromPdf(file) {
-        const buf = await file.arrayBuffer();
-        const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
-        let text = "";
-        for (let i = 1; i <= pdf.numPages; i++) {
-          const page = await pdf.getPage(i);
-          const content = await page.getTextContent();
-          text += content.items.map((it) => (it.str ? it.str + "\n" : "")).join("");
-        }
-        return text.trim();
+  const models = useMemo(() => parseModelList(pdfText), [pdfText]);
+
+  // 行追加（編集モード限定）
+  const addRow = useCallback(() => {
+    setRows((prev) => [
+      ...prev,
+      { id: genId(), model: "", listPrice: "", cost: "", found: false, note: "手入力", show: true, variantIndex: 0 },
+    ]);
+  }, []);
+
+  // 行削除
+  const deleteRow = useCallback((id) => {
+    setRows((prev) => prev.filter((r) => r.id !== id));
+  }, []);
+
+  const handleEstimate = useCallback(() => {
+    // 3: 決定 → 1(CSV)で価格を反映（型式は手入力/PDFを保持）
+    if (inplaceEdit) {
+      if (!spMap) { toast.message("SPマスタ未読込のため反映スキップ"); setInplaceEdit(false); return; }
+      setRows((prev) => resolvePricesFromCsv(prev));
+      setInplaceEdit(false);
+      toast.success("編集を確定し、CSVに基づく価格を反映しました（1優先）");
+      return;
+    }
+
+    // 既存表示があれば編集へ
+    if (rows.length > 0) { setInplaceEdit(true); toast.message("直接編集モードに切替"); return; }
+
+    // 初回: 1が読み込まれている前提で2→3
+    if (!spMap) { toast.error("SP マスタ未読込です"); return; }
+    if (!models.length) { toast.error("PDFから型式を抽出してください"); return; }
+
+    const expanded = buildRowsFromModels(models);
+    setRows(expanded);
+    setInplaceEdit(true);
+    toast.message("PDF結果を読み込み、直接編集モードに切替");
+  }, [inplaceEdit, rows.length, spMap, models, buildRowsFromModels, resolvePricesFromCsv]);
+
+  const updateRow = useCallback((id, key, val) => {
+    setRows((prev) => prev.map((r) => {
+      if (r.id !== id) return r;
+      let nextVal = val;
+      if (key === "listPrice" || key === "cost") {
+        // 先頭の '/' や通貨記号など不要文字を自動除去
+        nextVal = String(val).replace(/^[^0-9-]+/, "");
       }
+      return { ...r, [key]: nextVal };
+    }));
+  }, []);
 
-      function CopyBtn({ value }) {
-        const onClick = useCallback(async () => {
-          const ok = await safeCopy(value);
-          toast(ok ? "コピーしました" : "コピーできませんでした（ブラウザの制限）");
-        }, [value]);
-        return <button type="button" onClick={onClick} className="copy">コピー</button>;
-      }
+  return (
+    <div className="min-h-screen bg-white">
+      <div className="mx-auto max-w-6xl p-6">
+        <header className="mb-6 flex items-center justify-between">
+          <h1 className="text-2xl font-bold text-emerald-800">価格表示ツール（SP版）</h1>
+          <div className="text-xs text-emerald-700">背景：白 / 基調：ライトグリーン</div>
+        </header>
 
-      function DropZone({ onFiles, accept="*", label="ここにファイルをドロップ / クリックで選択" }) {
-        const inputRef = useRef(null);
-        const onDrop = useCallback((e) => {
-          e.preventDefault();
-          const files = e.dataTransfer.files;
-          if (files && files.length) onFiles(Array.from(files));
-        }, [onFiles]);
-        return (
-          <div className="drop" onDragOver={(e)=>e.preventDefault()} onDrop={onDrop} onClick={()=>inputRef.current?.click()}>
-            <p className="hint">{label}</p>
-            <input ref={inputRef} type="file" accept={accept} style={{display:"none"}} onChange={(e)=>onFiles(Array.from(e.target.files||[]))}/>
-          </div>
-        );
-      }
-
-      function genId(prefix="ROW") {
-        return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
-      }
-
-      function App() {
-        const { map: spMap, meta: spMeta, load: loadSp } = useSpCsvMap();
-        const [pdfText, setPdfText] = useState("");
-        const [loadingPdf, setLoadingPdf] = useState(false);
-        const [rows, setRows] = useState([]);
-        const [inplaceEdit, setInplaceEdit] = useState(false);
-
-        // ---- Priority helpers ----
-        const buildRowsFromModels = useCallback((modelList) => {
-          return modelList.flatMap((m, occIdx) => {
-            const key = normalizeKey(m);
-            const hit = spMap ? spMap.get(key) : null;
-            const variants = hit?.variants?.length ? hit.variants.slice(0, 2) : [{ listPrice: "", cost: "" }];
-            return variants.map((v, i) => ({
-              id: `${key}-${occIdx}-${i}`,
-              model: hit?.model || stripParen(m),
-              listPrice: v.listPrice,
-              cost: v.cost,
-              found: Boolean(hit),
-              note: hit ? "一致（SP）" : "未一致",
-              show: true,
-            }));
-          });
-        }, [spMap]);
-
-        const resolvePricesFromCsv = useCallback((prevRows) => {
-          if (!spMap) return prevRows;
-          return prevRows.map((r) => {
-            const key = normalizeKey(r.model || "");
-            const hit = key ? spMap.get(key) : null;
-            if (hit?.variants?.length) {
-              const v = hit.variants[0];
-              return { ...r, listPrice: v.listPrice, cost: v.cost, found: true, note: "一致（SP）" };
-            }
-            return { ...r, found: false, note: "未一致" };
-          });
-        }, [spMap]);
-
-        const handleLoadSpCsv = useCallback(async (files) => {
-          if (!files?.length) return;
-          const file = files[0];
-          if (!file.name.toLowerCase().endsWith(".csv")) return toast("CSVファイルを選択してください");
-          try {
-            await loadSp(file);
-            toast("SP 価格マスタを読み込みました");
-            setRows((prev) => resolvePricesFromCsv(prev)); // 1優先
-          } catch (e) {
-            console.error(e);
-            toast("CSVの読み込みに失敗しました");
-          }
-        }, [loadSp, resolvePricesFromCsv]);
-
-        const handlePdfDrop = useCallback(async (files) => {
-          if (!files?.length) return;
-          const file = files[0];
-          if (!(file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")))
-            return toast("PDFファイルを選択してください");
-          setLoadingPdf(true);
-          try {
-            const text = await extractTextFromPdf(file);
-            if (!text) toast("画像ベースのため表示エラー（テキスト抽出不可）");
-            setPdfText(text || "");
-            if (text) {
-              const nextModels = parseModelList(text);
-              const nextRows = buildRowsFromModels(nextModels); // 2 → 3
-              setRows(nextRows);
-              setInplaceEdit(true);
-              toast("PDFを優先して見積表を更新しました（2→3）");
-            }
-          } catch (e) {
-            console.error(e);
-            toast("PDF抽出に失敗しました");
-          } finally {
-            setLoadingPdf(false);
-          }
-        }, [buildRowsFromModels]);
-
-        const models = useMemo(() => parseModelList(pdfText), [pdfText]);
-
-        const addRow = useCallback(() => {
-          setRows((prev)=>[...prev, { id: genId(), model:"", listPrice:"", cost:"", found:false, note:"手入力", show:true }]);
-        }, []);
-        const deleteRow = useCallback((id)=> setRows((prev)=>prev.filter((r)=>r.id!==id)), []);
-
-        const handleEstimate = useCallback(() => {
-          if (inplaceEdit) {
-            if (!spMap) { toast("SPマスタ未読込のため反映スキップ"); setInplaceEdit(false); return; }
-            setRows((prev)=>resolvePricesFromCsv(prev)); // 3 で 1 を反映
-            setInplaceEdit(false);
-            toast("編集を確定し、CSVに基づく価格を反映しました（1優先）");
-            return;
-          }
-          if (rows.length > 0) { setInplaceEdit(true); toast("直接編集モードに切替"); return; }
-          if (!spMap) { toast("SP マスタ未読込です"); return; }
-          if (!models.length) { toast("PDFから型式を抽出してください"); return; }
-          const expanded = buildRowsFromModels(models);
-          setRows(expanded);
-          setInplaceEdit(true);
-          toast("PDF結果を読み込み、直接編集モードに切替");
-        }, [inplaceEdit, rows.length, spMap, models, buildRowsFromModels, resolvePricesFromCsv]);
-
-        const updateRow = useCallback((id, key, val) => {
-          setRows((prev)=> prev.map((r)=> r.id===id ? { ...r, [key]: val } : r));
-        }, []);
-
-        return (
-          <>
-            <header style={{ marginBottom: 24, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-              <h1 className="title">価格表示ツール（SP版）</h1>
-              <div className="hint">背景：白 / 基調：ライトグリーン</div>
-            </header>
-
-            <section>
-              <h2 className="title">1. SP価格マスタCSVの読み込み</h2>
-              <DropZone accept=".csv" onFiles={handleLoadSpCsv} label={"SP.csv をドロップ / クリックで選択（A=型式, B=定価, C=仕入）"} />
+        <Card className="mb-6 border-emerald-200">
+          <CardHeader>
+            <CardTitle className="text-emerald-800">1. SP価格マスタCSVの読み込み</CardTitle>
+          </CardHeader>
+          <CardContent className="grid grid-cols-1 gap-4">
+            <div className="space-y-2">
+              <DropZone accept=".csv" onFiles={handleLoadSpCsv} label={"SP.csv をドロップ / クリックで選択"} />
               {spMeta && (
-                <div className="hint" style={{ marginTop: 8 }}>
+                <div className="text-xs text-emerald-700">
                   {spMeta.fileName} / 有効行: {spMeta.kept} / 一意型式: {spMeta.uniqueKeys}件
                 </div>
               )}
-            </section>
+            </div>
+          </CardContent>
+        </Card>
 
-            <section>
-              <h2 className="title">2. 型式の入力（PDF抽出）</h2>
-              <DropZone accept="application/pdf,.pdf" onFiles={handlePdfDrop} label="PDFをドロップ / クリックで選択（画像ベースはエラー表示）" />
-              <div className="hint" style={{ marginTop:8 }}>
-                {loadingPdf ? "抽出中..." : pdfText ? `${pdfText.slice(0,80)}...` : ""}
-              </div>
-            </section>
+        <Card className="mb-6 border-emerald-200">
+          <CardHeader>
+            <CardTitle className="text-emerald-800">2. 型式の入力（PDF抽出）</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              <div className="text-sm font-medium text-emerald-900 mb-1">PDF</div>
+              <DropZone accept="application/pdf,.pdf" onFiles={handlePdfDrop} label="PDFをドロップ / クリックで選択" />
+              <div className="text-xs text-emerald-700">{loadingPdf ? "抽出中..." : pdfText ? `${pdfText.slice(0, 80)}...` : ""}</div>
+            </div>
+          </CardContent>
+        </Card>
 
-            <section>
-              <h2 className="title">3. 価格表の表示（SP／重複は上下2段表示）</h2>
-              <div className="row" style={{ marginBottom: 12 }}>
-                {inplaceEdit && (
-                  <button className="btn btn-ghost" onClick={addRow}>行を追加</button>
-                )}
-                <div className="row-right"></div>
-                <button className="btn btn-primary" onClick={handleEstimate}>
-                  {inplaceEdit ? "決定（見積表示）" : rows.length > 0 ? "再編集（見積表示）" : "見積表示"}
-                </button>
-              </div>
+        <Card className="mb-4 border-emerald-200">
+          <CardHeader>
+            <CardTitle className="text-emerald-800">3. 価格表の表示</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-wrap items-center gap-3 mb-4">
+              {inplaceEdit && (
+                <Button
+                  variant="secondary"
+                  className="bg-white hover:bg-emerald-50 text-emerald-700 border border-emerald-200"
+                  onClick={addRow}
+                >
+                  行を追加
+                </Button>
+              )}
+              <Button className="ml-auto bg-emerald-600 hover:bg-emerald-700 text-white" onClick={handleEstimate}>
+                {inplaceEdit ? "決定（見積表示）" : rows.length > 0 ? "再編集（見積表示）" : "見積表示"}
+              </Button>
+            </div>
 
-              <div style={{ overflow:"auto", border:"1px solid var(--emerald-200)", borderRadius:12 }}>
-                <table>
-                  <thead>
+            <div className="overflow-auto rounded-xl border border-emerald-200">
+              <table className="w-full text-sm">
+                <thead className="bg-emerald-50 text-emerald-900">
+                  <tr>
+                    <th className="px-3 py-2 text-left">項目</th>
+                    <th className="px-3 py-2 text-left">型式</th>
+                    <th className="px-3 py-2 text-left">定価</th>
+                    <th className="px-3 py-2 text-left">仕入</th>
+                    <th className="px-3 py-2 text-left">備考</th>
+                    <th className="px-3 py-2 text-left">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.length === 0 ? (
                     <tr>
-                      <th>項目</th>
-                      <th>型式</th>
-                      <th>定価</th>
-                      <th>仕入</th>
-                      <th>備考</th>
-                      <th>操作</th>
+                      <td colSpan={6} className="px-3 py-6 text-center text-emerald-700">
+                        ここに結果が表示されます
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {rows.length === 0 ? (
-                      <tr><td colSpan="6" className="hint" style={{ textAlign:"center", padding:16 }}>ここに結果が表示されます</td></tr>
-                    ) : rows.map((r, idx) => (
-                      <tr key={r.id} className={r.found ? "" : "warn-row"}>
-                        <td style={{ fontSize:12 }}>{idx + 1}</td>
-                        <td style={{ whiteSpace:"nowrap" }}>
+                  ) : (
+                    rows.map((r, idx) => (
+                      <tr key={r.id} className={r.found ? "" : "bg-orange-50"}>
+                        <td className="px-3 py-2 text-xs">{idx + 1}</td>
+                        <td className="px-3 py-2 whitespace-nowrap">
                           {inplaceEdit ? (
-                            <input type="text" value={r.model} onChange={(e)=>updateRow(r.id,"model",e.target.value)} />
+                            <input
+                              className="w-full px-2 py-1 border rounded-md"
+                              value={r.model}
+                              onChange={(e) => updateRow(r.id, "model", e.target.value)}
+                            />
                           ) : (
-                            <span style={{ fontWeight:600, color:"var(--emerald-800)" }}>{r.model}</span>
+                            <span className="font-medium text-emerald-900">{r.model}</span>
                           )}
                           {!inplaceEdit && <CopyBtn value={r.model} />}
                         </td>
-                        <td>
+                        <td className="px-3 py-2">
                           {inplaceEdit ? (
-                            <input type="text" value={r.listPrice} onChange={(e)=>updateRow(r.id,"listPrice",e.target.value)} placeholder="定価" />
+                            <input
+                              className="w-full px-2 py-1 border rounded-md"
+                              value={r.listPrice}
+                              onChange={(e) => updateRow(r.id, "listPrice", e.target.value)}
+                              placeholder="定価"
+                            />
                           ) : r.listPrice ? (
                             <span>{jpYen(r.listPrice)}</span>
-                          ) : <span className="muted">—</span>}
+                          ) : (
+                            <span className="text-gray-400">—</span>
+                          )}
                           {!inplaceEdit && r.listPrice && <CopyBtn value={jpYen(r.listPrice)} />}
                         </td>
-                        <td>
+
+                        <td className="px-3 py-2">
                           {inplaceEdit ? (
-                            <input type="text" value={r.cost} onChange={(e)=>updateRow(r.id,"cost",e.target.value)} placeholder="仕入" />
+                            <input
+                              className="w-full px-2 py-1 border rounded-md"
+                              value={r.cost}
+                              onChange={(e) => updateRow(r.id, "cost", e.target.value)}
+                              placeholder="仕入"
+                            />
                           ) : r.cost ? (
                             <span>{jpYen(r.cost)}</span>
-                          ) : <span className="muted">—</span>}
+                          ) : (
+                            <span className="text-gray-400">—</span>
+                          )}
                           {!inplaceEdit && r.cost && <CopyBtn value={jpYen(r.cost)} />}
                         </td>
-                        <td style={{ fontSize:12 }}>
-                          {r.note ? <span style={{ color:"var(--emerald-700)" }}>{r.note}</span> : r.found ? <span style={{ color:"var(--emerald-700)" }}>一致（SP）</span> : <span style={{ color:"#9A3412" }}>未一致</span>}
+
+                        <td className="px-3 py-2 text-xs">
+                          {r.note ? (
+                            <span className="text-emerald-700">{r.note}</span>
+                          ) : r.found ? (
+                            <span className="text-emerald-700">一致（SP）</span>
+                          ) : (
+                            <span className="text-orange-700">未一致</span>
+                          )}
                         </td>
-                        <td style={{ fontSize:12 }}>
-                          <button className="btn btn-danger" onClick={()=>deleteRow(r.id)}>削除</button>
+
+                        <td className="px-3 py-2 text-xs">
+                          <Button
+                            variant="secondary"
+                            className="bg-white hover:bg-red-50 text-red-700 border border-red-200"
+                            onClick={() => deleteRow(r.id)}
+                          >
+                            削除
+                          </Button>
                         </td>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </section>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
 
-            <footer className="hint" style={{ marginTop:24 }}>
-              <ul>
-                <li>CSVは <b>A=型式, B=定価, C=仕入</b>。同一型式で異なる金額がある場合は<b>最大2種類</b>を保持・表示します。</li>
-                <li><b>TNHS-</b> / <b>TEL</b> / <b>FAX</b> / <b>DSP3000</b> / <b>PC</b> / <b>UL</b> / <b>COM</b> 始まりは自動で無視します。</li>
-                <li>型式末尾の <b>( ... )</b> は無視して照合します（例：ABC-123 (50Hz) → ABC-123）。</li>
-                <li>PDFはテキストベースのみ対応（画像ベースPDFは抽出不可）。</li>
-              </ul>
-            </footer>
-          </>
-        );
-      }
+        <footer className="text-xs text-emerald-700 mt-6">
+          <ul className="list-disc pl-4 space-y-1">
+            <li>CSVは <b>A=型式, B=定価, C=仕入</b>。同一型式で異なる金額がある場合は<b>最大2種類</b>を保持・表示します。</li>
+            <li><b>TNHS-</b> で始まる見積番号、<b>TEL</b>・<b>FAX</b>、<b>DSP3000</b>、<b>PC/UL/COM</b> 始まりは自動で無視します。</li>
+            <li>型式末尾の <b>( ... )</b> は無視して照合します（例：ABC-123 (50Hz) → ABC-123）。</li>
+            <li>カタカナ（全角・半角）を含む型式は読み込み対象外です。</li>
+            <li>PDFはテキストベースのみ対応。画像ベースPDFは抽出不可です。</li>
+          </ul>
+        </footer>
+      </div>
+    </div>
+  );
+}
 
-      const root = ReactDOM.createRoot(document.getElementById("root"));
-      root.render(<App />);
-    </script>
-  </body>
-</html>
+// ---- Minimal smoke tests (dev only) ----
+(function runSmokeTests() {
+  try {
+    if (typeof window === "undefined") return;
+
+    const samples = ["TNHS-123", "TEL03", "FAX052", "DSP3000", "PC100", "UL200", "COM300", "ABC-123", "ＡＢＣ-１２３", "DEF-2(注記)"];
+    console.log("[価格表示ツール] isNoise:", samples.map((s) => [s, isNoise(s)]));
+
+    console.log("[価格表示ツール] normalizeKey:", normalizeKey("Abc- 123 (50Hz)")); // 期待: "ABC123"
+
+    const txt = "ABC-1 ABC-1 DEF-2(注記) ｱｲｳ-1 KATAKANA-ソ";
+    const list = parseModelList(txt);
+    console.log("[価格表示ツール] parseModelList (duplicates kept, kana filtered) =>", list);
+
+    console.log("[価格表示ツール] jpYen format:", [jpYen(0), jpYen(1234), jpYen("12,345"), jpYen("98,765.5円")]);
+
+    // 追加テスト: resolvePricesFromCsv が variantIndex を維持するか
+    const mockMap = new Map([
+      ["ABC123", { model: "ABC-123", variants: [{ listPrice: "1000", cost: "800" }, { listPrice: "1200", cost: "900" }] }],
+    ]);
+    (function testResolveVariant() {
+      const prevRows = [
+        { id: "t1", model: "ABC-123", listPrice: "", cost: "", variantIndex: 0 },
+        { id: "t2", model: "ABC-123", listPrice: "", cost: "", variantIndex: 1 },
+      ];
+      const _spMap = mockMap;
+      const out = prevRows.map((r) => {
+        const key = normalizeKey(r.model || "");
+        const hit = key ? _spMap.get(key) : null;
+        if (hit?.variants?.length) {
+          const vi = Number.isInteger(r?.variantIndex) ? r.variantIndex : 0;
+          const v = hit.variants[vi] || hit.variants[0];
+          return { ...r, listPrice: v.listPrice, cost: v.cost };
+        }
+        return r;
+      });
+      console.log("[価格表示ツール] variantIndex test:", out);
+    })();
+
+    // 追加テスト: updateRow の金額先頭不要文字除去
+    (function testSanitizePrice() {
+      const before = "/12,345";
+      const after = String(before).replace(/^[^0-9-]+/, "");
+      console.log("[価格表示ツール] sanitize price:", before, "->", after);
+    })();
+
+    if (window.__RUN_COPY_TEST__ === true) {
+      safeCopy("COPY_TEST").then((ok) => console.log("[価格表示ツール] safeCopy result:", ok)).catch((e) => console.warn("safeCopy err", e));
+    } else {
+      console.log("[価格表示ツール] safeCopy test skipped (set window.__RUN_COPY_TEST__ = true to run)");
+    }
+  } catch (e) {
+    console.warn("[価格表示ツール] smoke tests failed:", e);
+  }
+})();
