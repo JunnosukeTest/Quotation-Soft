@@ -1,452 +1,514 @@
-<!DOCTYPE html>
-<html lang="ja">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>価格表示ツール（PDF→型式→NR/SP/HNR表示・コピー対応）</title>
-<style>
-  :root{--brand:#0a6}
-  body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans JP",Meiryo,sans-serif;background:#f7faf9;margin:0}
-  header{background:#fff;border-bottom:1px solid #e4efe9;padding:12px 16px}
-  h1{font-size:16px;margin:0}
-  main{max-width:1200px;margin:0 auto;padding:16px;display:grid;gap:16px}
-  .card{background:#fff;border:1px solid #e4efe9;border-radius:12px;overflow:hidden}
-  .card h2{margin:0;padding:10px 12px;background:#f3fbf7;border-bottom:1px solid #e8f2ee;font-size:14px}
-  .card .body{padding:12px}
-  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-  .btn{background:var(--brand);color:#fff;border:0;padding:9px 12px;border-radius:8px;font-weight:700;cursor:pointer}
-  .btn:disabled{background:#9acfbf;cursor:not-allowed}
-  .ghost{background:#eef5f2;color:#234;border:0;padding:8px 10px;border-radius:8px}
-  input[type=file]{padding:6px 8px;border:1px solid #dce7e2;border-radius:8px;background:#fff}
-  .drop{border:2px dashed #9dd8c9;border-radius:10px;padding:20px;text-align:center;cursor:pointer;background:#fff}
-  .drop.drag{background:#eefaf6;border-color:var(--brand)}
-  .muted{font-size:12px;opacity:.8}
-  table{width:100%;border-collapse:collapse}
-  th,td{padding:6px 8px;border-bottom:1px solid #eef4f1;vertical-align:middle}
-  thead th{background:#f5fbf9;position:sticky;top:0;z-index:1}
-  .right{text-align:right}
-  .editable{width:100%;border:1px solid #dce7e2;border-radius:8px;padding:6px 8px}
-  select{border:1px solid #dce7e2;border-radius:8px;padding:6px 8px}
-  .ok{color:#0a6;font-weight:700}
-  .warn{color:#c00;font-weight:700}
-  .copy-btn{margin-left:8px;border:1px solid #dbe6e1;background:#fff;border-radius:6px;cursor:pointer;padding:4px 6px;font-size:12px}
-  .copy-btn.copied{background:#e6fbef;border-color:#a7e2c5;color:#086}
-  .cell-flex{display:flex;align-items:center;gap:6px}
-  .cell-flex.end{justify-content:flex-end}
-  .mono{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, "Roboto Mono", monospace}
-</style>
-</head>
-<body>
-<header><h1>価格表示ツール（PDF→型式→NR/SP/HNR表示・コピー対応）</h1></header>
-<main>
-  <!-- Step 1: 価格マスタの読込 -->
-  <div class="card">
-    <h2>① 価格マスタ（Excel/CSV）</h2>
-    <div class="body">
-      <div class="row">
-        <input id="masterInput" type="file" accept=".xlsx,.xls,.csv" />
-        <span id="masterStatus" class="muted">未読込</span>
-        <button id="downloadSample" class="ghost">サンプルCSV</button>
-      </div>
-      <div class="muted" style="margin-top:6px">
-        列名は自動認識します：<b>型式/品番</b>、<b>NR</b>、<b>SP</b>、<b>HNR</b>（あれば）。<br>
-        既存の<b>定価/上代</b>→NR扱い、<b>仕入/仕切/原価</b>→SP扱いとしても取り込みます。
-      </div>
-    </div>
-  </div>
+import React, { useCallback, useMemo, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { toast } from "sonner";
+import Papa from "papaparse";
+import * as pdfjsLib from "pdfjs-dist";
+import "pdfjs-dist/build/pdf.worker.mjs";
 
-  <!-- Step 2: PDF投入→型式抽出＆編集 -->
-  <div class="card">
-    <h2>② PDF（見積）から型式抽出 → 編集</h2>
-    <div class="body">
-      <div class="row">
-        <div id="drop" class="drop">PDFをドロップ / クリックして選択</div>
-        <input id="pdfInput" type="file" accept=".pdf,application/pdf" style="display:none">
-        <span id="pdfStatus" class="muted">未読込</span>
-      </div>
-      <div style="margin-top:10px; max-height:360px; overflow:auto; border:1px solid #eef4f1; border-radius:8px">
-        <table>
-          <thead><tr><th style="width:56px">No</th><th>抽出型式（手修正可）</th></tr></thead>
-          <tbody id="modelsTbody"></tbody>
-        </table>
-      </div>
-    </div>
-  </div>
-
-  <!-- Step 3: 見積表示（NR/SP/HNR） -->
-  <div class="card">
-    <h2>③ 見積表示（型式・NR・SP・HNR）</h2>
-    <div class="body">
-      <div class="row" style="margin-bottom:8px">
-        <button id="showBtn" class="btn" disabled>見積表示</button>
-        <button id="exportCsv" class="ghost" disabled>CSVエクスポート</button>
-        <span id="resultStatus" class="muted">マスタと型式が必要です</span>
-      </div>
-      <div class="row" style="margin-bottom:8px">
-        CSV出力マッピング：
-        定価 = 
-        <select id="mapList">
-          <option value="NR" selected>NR</option>
-          <option value="SP">SP</option>
-          <option value="HNR">HNR</option>
-        </select>
-        ／ 仕入 = 
-        <select id="mapCost">
-          <option value="SP" selected>SP</option>
-          <option value="NR">NR</option>
-          <option value="HNR">HNR</option>
-        </select>
-        <span class="muted">（画面表示は常に NR/SP/HNR の3列を出します）</span>
-      </div>
-      <div style="max-height:460px; overflow:auto; border:1px solid #eef4f1; border-radius:8px">
-        <table>
-          <thead>
-            <tr>
-              <th style="width:56px">No</th>
-              <th>型式（PDF/編集）</th>
-              <th>マスタ型式（候補）</th>
-              <th class="right">NR</th>
-              <th class="right">SP</th>
-              <th class="right">HNR</th>
-              <th>状態</th>
-            </tr>
-          </thead>
-          <tbody id="resultTbody"></tbody>
-        </table>
-      </div>
-    </div>
-  </div>
-</main>
-
-<!-- ライブラリ（CDNフォールバック） -->
-<script>
-async function loadScript(src){return new Promise((res,rej)=>{const s=document.createElement('script');s.src=src;s.defer=true;s.onload=()=>res();s.onerror=()=>rej(new Error('load fail '+src));document.head.appendChild(s);});}
-(async()=>{
-  const pdfCDN=["https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js","https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"];
-  const xlsxCDN=["https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js","https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"];
-  let ok=false, used=null;
-  for(const u of pdfCDN){try{await loadScript(u); if(window.pdfjsLib){used=u; ok=true;break}}catch{}}
-  for(const u of xlsxCDN){try{await loadScript(u); if(window.XLSX)break}catch{}}
-  if(!ok||!window.XLSX){alert("ライブラリ読込失敗"); return}
-  try{pdfjsLib.GlobalWorkerOptions.workerSrc=used.replace(/pdf\.min\.js$/,"pdf.worker.min.js")}catch{}
-})();
-</script>
-
-<script>
-/* ========= 状態 ========= */
-const state={
-  masterRows:[],          // {model, NR, SP, HNR}
-  masterIndex:new Map(),  // norm(model)->row
-  modelInputs:[],         // HTMLInputElement[]
-  matches:[]              // 表示用
+// ---- Helpers ----
+const jpYen = (n) => {
+  const num = parseFloat(String(n ?? "").toString().replace(/[^0-9.-]/g, ""));
+  if (isNaN(num)) return "";
+  return new Intl.NumberFormat("ja-JP").format(num); // 単位は付けない
 };
 
-/* ========= 要素 ========= */
-const masterInput=document.getElementById('masterInput');
-const masterStatus=document.getElementById('masterStatus');
-const downloadSample=document.getElementById('downloadSample');
+// ()内注記を無視した型式に整形
+const stripParen = (s) => String(s ?? "").replace(/\([^)]*\)/g, "").trim();
 
-const pdfInput=document.getElementById('pdfInput');
-const drop=document.getElementById('drop');
-const pdfStatus=document.getElementById('pdfStatus');
+// ノイズ判定: TNHS-*, TEL*, FAX*, DSP3000, PC*, UL*, COM*
+const isNoise = (s) => /^(TNHS-|TEL|FAX|PC|UL|COM)/i.test(String(s).trim()) || /^DSP3000$/i.test(String(s).trim());
 
-const modelsTbody=document.getElementById('modelsTbody');
+// 型式抽出: 先頭が大文字アルファベット以外、カタカナ（全角/半角）を含むものは除外
+const isValidModel = (s) => {
+  const base = stripParen(s);
+  if (!/^[A-Z]/.test(base)) return false; // 半角英大文字で開始
+  // 全角カタカナ: [ァ-ヶー]、半角カタカナ: [ｦ-ﾟ]
+  if (/[ァ-ヶー]/.test(base) || /[ｦ-ﾟ]/.test(base)) return false;
+  return true; // 半角数字はOK
+};
 
-const showBtn=document.getElementById('showBtn');
-const exportCsv=document.getElementById('exportCsv');
-const resultStatus=document.getElementById('resultStatus');
-const resultTbody=document.getElementById('resultTbody');
+// キー正規化（大文字化・ハイフン/空白除去・()内削除）
+const normalizeKey = (s) => stripParen(s).toUpperCase().replace(/[-\s]/g, "");
 
-const mapList=document.getElementById('mapList');
-const mapCost=document.getElementById('mapCost');
+const parseModelList = (text) => {
+  if (!text) return [];
+  // 同一型式も“すべて”残す（重複除去しない）
+  return text
+    .split(/[\n,;\t\s]+/)
+    .map((x) => stripParen(x))
+    .map((x) => x.trim())
+    .filter((x) => Boolean(x) && !isNoise(x) && isValidModel(x));
+};
 
-/* ========= 共通 ========= */
-function toHalfWidth(s){return String(s).replace(/[！-～]/g,ch=>String.fromCharCode(ch.charCodeAt(0)-0xFEE0)).replace(/　/g,' ')}
-function normModel(s){
-  if(!s) return "";
-  let x=toHalfWidth(String(s)).toUpperCase().trim();
-  x=x.replace(/[\s\-_/]/g,''); // 余白・記号を除去
-  x=x.replace(/O/g,'0').replace(/[IL]/g,'1'); // ゆらぎ
-  return x;
+// クリップボード安全コピー（Permissions-Policyや非HTTPSでもフォールバック）
+async function safeCopy(text) {
+  const val = String(text ?? "");
+  try {
+    if (typeof navigator !== "undefined" && navigator.clipboard && typeof window !== "undefined" && window.isSecureContext) {
+      await navigator.clipboard.writeText(val);
+      return true;
+    }
+  } catch (_) {}
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = val;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.top = "-1000px";
+    ta.style.left = "-1000px";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    ta.setSelectionRange(0, ta.value.length);
+    const ok = document.execCommand && document.execCommand("copy");
+    document.body.removeChild(ta);
+    return !!ok;
+  } catch (_) {
+    return false;
+  }
 }
-function yen(n){ return (n==null||n==="")? "" : Number(n).toLocaleString('ja-JP') }
-function toH(s){return String(s??"").replace(/[&<>"]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m]))}
-async function copyText(text, btn){
-  try{
-    if(navigator.clipboard && window.isSecureContext){ await navigator.clipboard.writeText(text); }
-    else{ const ta=document.createElement('textarea'); ta.value=text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); }
-    if(btn){ btn.classList.add('copied'); const old=btn.textContent; btn.textContent='Copied!'; setTimeout(()=>{btn.classList.remove('copied'); btn.textContent=old;}, 1500); }
-  }catch(e){ if(btn){ btn.textContent='コピー失敗'; btn.disabled=true; } console.error(e); }
-}
-function makeCopyBtn(getter,label="コピー"){
-  const b=document.createElement('button'); b.className='copy-btn'; b.type='button'; b.textContent=label;
-  b.addEventListener('click',()=> copyText(getter(), b));
-  return b;
-}
 
-/* ========= サンプルCSV（NR/SP/HNR列あり） ========= */
-downloadSample.addEventListener('click', ()=>{
-  const csv = "型式,NR,SP,HNR\nMFC-S008,200000,187000,195000\nMFC-DP01,20000,16000,18000\nDPM-011H1-15F,650000,598000,620000\nC30-FH1-M5,80000,70000,76000\nDSP-UC-N,25000,20000,23000\n";
-  const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"})); a.download="価格マスタ_サンプル_NR_SP_HNR.csv"; a.click();
-});
+function useSpCsvMap() {
+  const [map, setMap] = useState(null);
+  const [meta, setMeta] = useState(null);
 
-/* ========= 価格マスタ読込（NR/SP/HNR対応） ========= */
-masterInput.addEventListener('change', async ()=>{
-  const f=masterInput.files?.[0]; if(!f){ masterStatus.textContent="未読込"; return; }
-  try{
-    masterStatus.textContent="読込中…";
-    const buf=await f.arrayBuffer();
-    let rows=[];
-    if(/\.csv$/i.test(f.name)){
-      const txt=new TextDecoder('utf-8').decode(buf);
-      const lines=txt.split(/\r?\n/).filter(l=>l.trim().length>0);
-      const header=lines[0].split(',').map(h=>h.trim());
-      rows = lines.slice(1).map(l=>{
-        const cells=l.split(',');
-        const obj={}; header.forEach((h,i)=> obj[h]=cells[i]??"");
-        return obj;
+  const load = useCallback(async (file) => {
+    return new Promise((resolve, reject) => {
+      Papa.parse(file, {
+        header: false,
+        skipEmptyLines: true,
+        complete: (res) => {
+          const rows = res.data;
+          const m = new Map();
+          let kept = 0;
+
+          for (const row of rows) {
+            const rawModel = row?.[0];
+            const listPrice = row?.[1] ?? "";
+            const cost = row?.[2] ?? "";
+            if (!rawModel) continue;
+
+            const model = stripParen(rawModel);
+            if (isNoise(model) || !isValidModel(model)) continue;
+
+            const key = normalizeKey(model);
+            const entry = m.get(key) || { model: String(model).trim(), variants: [] };
+
+            // 同一金額ペア重複を避け、最大2件まで保持
+            const sig = String(listPrice) + "|||" + String(cost);
+            const hasSame = entry.variants.some((v) => (String(v.listPrice) + "|||" + String(v.cost)) === sig);
+            if (!hasSame && entry.variants.length < 2) {
+              entry.variants.push({ listPrice, cost });
+            }
+            m.set(key, entry);
+            kept++;
+          }
+
+          setMap(m);
+          setMeta({ rows: rows.length, kept, uniqueKeys: m.size, fileName: file.name });
+          resolve(m);
+        },
+        error: (err) => reject(err),
+        encoding: "UTF-8",
       });
-    }else{
-      const wb=XLSX.read(buf,{type:'array'}); const sh=wb.Sheets[wb.SheetNames[0]];
-      rows=XLSX.utils.sheet_to_json(sh,{defval:""});
-    }
-    if(!rows.length){ throw new Error("データ行がありません"); }
-
-    // 列推定（全角NR/SP/HNRも吸収）
-    const pick=(names)=> Object.keys(rows[0]||{}).find(h=> names.some(n=> new RegExp(n,'i').test(String(h).replace(/[！-～]/g,ch=>String.fromCharCode(ch.charCodeAt(0)-0xFEE0)))));
-    const modelCol = pick(["型式","品番","型番","Model","Part"]);
-    const nrCol    = pick(["NR","定価","上代","標準価格","List"]);
-    const spCol    = pick(["SP","仕入","仕切","原価","Cost","買価格"]);
-    const hnrCol   = pick(["HNR"]);
-
-    if(!modelCol) throw new Error("型式列が見つかりません（例：型式/品番）");
-
-    state.masterRows = rows.map(r=>{
-      const parseN = (v)=> Number(String(v??"").replace(/[^\d.-]/g,''))||0;
-      return {
-        model: String(r[modelCol]||"").trim(),
-        NR:  nrCol  ? parseN(r[nrCol])  : 0,
-        SP:  spCol  ? parseN(r[spCol])  : 0,
-        HNR: hnrCol ? parseN(r[hnrCol]) : 0
-      };
-    }).filter(r=>r.model);
-
-    // インデックス
-    state.masterIndex.clear();
-    for(const r of state.masterRows){ state.masterIndex.set(normModel(r.model), r); }
-
-    masterStatus.textContent = `読込OK：${state.masterRows.length}件（列: ${nrCol?'NR':''}${spCol?'/SP':''}${hnrCol?'/HNR':''})`;
-    updateShowButtonState();
-  }catch(e){
-    console.error(e);
-    masterStatus.textContent="読込失敗: "+e.message;
-  }
-});
-
-/* ========= PDF → 型式抽出 & 編集 ========= */
-['dragenter','dragover'].forEach(ev=> drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('drag')}));
-['dragleave','drop'].forEach(ev=> drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('drag')}));
-drop.addEventListener('click',()=> pdfInput.click());
-drop.addEventListener('drop', e=>{
-  e.preventDefault(); drop.classList.remove('drag');
-  const f=[...e.dataTransfer.files].find(f=>/\.pdf$/i.test(f.name)); if(f) loadPdf(f);
-});
-pdfInput.addEventListener('change', ()=>{ const f=pdfInput.files?.[0]; if(f) loadPdf(f); });
-
-async function loadPdf(f){
-  if(!window.pdfjsLib){ alert("pdf.js 未ロード"); return; }
-  pdfStatus.textContent="読込中…";
-  try{
-    const buf=await f.arrayBuffer();
-    const pdf=await pdfjsLib.getDocument({data:buf}).promise;
-
-    // テキスト行を上→下で再構成
-    let lines=[];
-    for(let p=1;p<=pdf.numPages;p++){
-      const page=await pdf.getPage(p);
-      const c=await page.getTextContent();
-      lines=lines.concat(rebuildLines(c.items));
-    }
-
-    // 型式候補抽出（英数＋-_/ を含む3文字以上のトークン）
-    const models = extractModels(lines);
-    renderModelInputs(models);
-
-    pdfStatus.textContent=`抽出: ${models.length} 件`;
-    updateShowButtonState();
-  }catch(e){
-    console.error(e);
-    pdfStatus.textContent="読込失敗: "+e.message;
-  }
-}
-
-function rebuildLines(items){
-  const tol=2, pts=items.map(it=>({x:it.transform[4],y:it.transform[5],s: toHalfWidth(it.str)}));
-  // y降順→x昇順で並べて行にまとめ、最後に反転して上→下へ
-  pts.sort((a,b)=> (Math.abs(b.y-a.y)>tol?b.y-a.y:a.x-b.x));
-  let curY=null,buf=[],rows=[];
-  for(const p of pts){
-    if(curY===null||Math.abs(p.y-curY)<=tol){curY=curY??p.y;buf.push(p)}
-    else{
-      buf.sort((a,b)=>a.x-b.x);
-      const joined=buf.map(x=>x.s).join(' ').replace(/\s{2,}/g,' ').trim();
-      rows.push(joined);
-      curY=p.y;buf=[p];
-    }
-  }
-  if(buf.length){ buf.sort((a,b)=>a.x-b.x); rows.push(buf.map(x=>x.s).join(' ').replace(/\s{2,}/g,' ').trim()); }
-  rows.reverse();
-  return rows.filter(Boolean);
-}
-function extractModels(lines){
-  const set=new Set();
-  const re=/[A-Za-z0-9][A-Za-z0-9\-_/]*[A-Za-z0-9]/g;
-  const ban=/^(FAX|TEL|DATE|QTY|PCS|PDF|NO|JAN|CODE|MODEL)$/i;
-  for(const line of lines){
-    const s=toHalfWidth(line);
-    const toks = s.match(re) || [];
-    for(const t of toks){
-      if(t.length<3) continue;
-      if(ban.test(t)) continue;
-      set.add(t);
-    }
-  }
-  return [...set];
-}
-function renderModelInputs(models){
-  modelsTbody.innerHTML='';
-  state.modelInputs = models.map((m,i)=>{
-    const tr=document.createElement('tr');
-    const tdNo=document.createElement('td'); tdNo.textContent=String(i+1);
-    const tdIn=document.createElement('td');
-    const inp=document.createElement('input'); inp.className='editable mono'; inp.value=m;
-    inp.addEventListener('input', updateShowButtonState);
-    tdIn.appendChild(inp);
-    tr.appendChild(tdNo); tr.appendChild(tdIn);
-    modelsTbody.appendChild(tr);
-    return inp;
-  });
-}
-
-/* ========= 見積表示（NR/SP/HNRを表示＋コピー） ========= */
-function updateShowButtonState(){
-  const okMaster = state.masterRows.length>0;
-  const okModels = state.modelInputs.length>0;
-  showBtn.disabled = !(okMaster && okModels);
-  exportCsv.disabled = true;
-  resultStatus.textContent = showBtn.disabled ? "マスタと型式が必要です" : "見積表示を押してください";
-}
-showBtn.addEventListener('click', ()=>{
-  const models = state.modelInputs.map((inp,i)=>({idx:i+1, pdfModel: inp.value.trim()})).filter(x=>x.pdfModel);
-  const rows=[];
-  for(const it of models){
-    const key=normModel(it.pdfModel);
-    const row = state.masterIndex.get(key);
-    rows.push({
-      idx: it.idx,
-      pdfModel: it.pdfModel,
-      masterModel: row?.model || "",
-      NR: row?.NR || 0,
-      SP: row?.SP || 0,
-      HNR: row?.HNR || 0,
-      ok: !!row
     });
+  }, []);
+
+  return { map, meta, load };
+}
+
+async function extractTextFromPdf(file) {
+  try {
+    const buf = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+    let text = "";
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      text += content.items.map((it) => (it.str ? it.str + "\n" : "")).join("");
+    }
+    return text.trim();
+  } catch (e) {
+    console.error(e);
+    throw e;
   }
-  state.matches = rows;
-  renderResults(rows);
-});
-function renderResults(rows){
-  resultTbody.innerHTML='';
-  if(!rows.length){ resultStatus.textContent="型式がありません"; return; }
-  resultStatus.textContent = "結果を表示しました。未一致は候補から選択してください。";
-  // 候補（先頭200件）
-  const masterOptions = state.masterRows.slice(0, 200).map(r=>r.model);
+}
 
-  rows.forEach((r)=>{
-    const tr=document.createElement('tr');
+function CopyBtn({ value }) {
+  const handleCopy = useCallback(async () => {
+    const ok = await safeCopy(value);
+    if (ok) {
+      toast.success("コピーしました");
+    } else {
+      toast.error("コピーできませんでした（ブラウザの制限）");
+    }
+  }, [value]);
 
-    // 型式（表示+コピー）
-    const tdPdf=document.createElement('td');
-    const pdfSpan=document.createElement('span'); pdfSpan.textContent=r.pdfModel; pdfSpan.className='mono';
-    const btnCopyPdf = makeCopyBtn(()=> r.pdfModel, "コピー");
-    const wrapPdf=document.createElement('div'); wrapPdf.className='cell-flex'; wrapPdf.append(pdfSpan, btnCopyPdf);
+  return (
+    <Button
+      type="button"
+      variant="secondary"
+      className="ml-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200"
+      onClick={handleCopy}
+    >
+      コピー
+    </Button>
+  );
+}
 
-    // マスタ型式の候補セレクト
-    const tdSel=document.createElement('td');
-    const sel=document.createElement('select');
-    const defaultOpt=document.createElement('option');
-    defaultOpt.value=""; defaultOpt.textContent = r.masterModel ? r.masterModel : "（候補を選択）";
-    sel.appendChild(defaultOpt);
-    masterOptions.forEach(m=>{
-      const o=document.createElement('option'); o.value=m; o.textContent=m; sel.appendChild(o);
-    });
-    sel.addEventListener('change', ()=>{
-      const model=sel.value;
-      if(!model) return;
-      const row = state.masterRows.find(x=>x.model===model);
-      if(row){
-        r.masterModel=row.model; r.NR=row.NR; r.SP=row.SP; r.HNR=row.HNR; r.ok=true;
-        renderResults(state.matches); // 再描画
+function DropZone({ onFiles, accept = "*", label = "ここにファイルをドロップ / クリックで選択" }) {
+  const inputRef = useRef(null);
+  const onDrop = useCallback(
+    (e) => {
+      e.preventDefault();
+      const files = e.dataTransfer.files;
+      if (files && files.length) onFiles(Array.from(files));
+    },
+    [onFiles]
+  );
+
+  return (
+    <div
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={onDrop}
+      onClick={() => inputRef.current?.click()}
+      className="w-full border-2 border-dashed rounded-2xl p-6 text-center cursor-pointer bg-white hover:bg-emerald-50 border-emerald-300"
+    >
+      <p className="text-sm text-emerald-700">{label}</p>
+      <input
+        ref={inputRef}
+        type="file"
+        accept={accept}
+        className="hidden"
+        onChange={(e) => onFiles(Array.from(e.target.files || []))}
+      />
+    </div>
+  );
+}
+
+function genId(prefix = "ROW") {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export default function App() {
+  const { map: spMap, meta: spMeta, load: loadSp } = useSpCsvMap();
+  const [pdfText, setPdfText] = useState("");
+  const [loadingPdf, setLoadingPdf] = useState(false);
+  const [rows, setRows] = useState([]); // 表示用フラット行
+  const [inplaceEdit, setInplaceEdit] = useState(false); // テーブル直接編集モード
+
+  // ---- Priority helpers ----
+  // 2: PDF -> rows を生成（CSV(1) があれば価格埋め）
+  const buildRowsFromModels = useCallback(
+    (modelList) => {
+      return modelList.flatMap((m, occIdx) => {
+        const key = normalizeKey(m);
+        const hit = spMap ? spMap.get(key) : null;
+        const variants = hit?.variants?.length ? hit.variants.slice(0, 2) : [{ listPrice: "", cost: "" }];
+        return variants.map((v, i) => ({
+          id: `${key}-${occIdx}-${i}`,
+          model: hit?.model || stripParen(m),
+          listPrice: v.listPrice,
+          cost: v.cost,
+          found: Boolean(hit),
+          note: hit ? "一致（SP）" : "未一致",
+          show: true,
+        }));
+      });
+    },
+    [spMap]
+  );
+
+  // 1: CSV -> 既存行の価格を再解決（型式は保持／手入力を優先）
+  const resolvePricesFromCsv = useCallback(
+    (prevRows) => {
+      if (!spMap) return prevRows;
+      return prevRows.map((r) => {
+        const key = normalizeKey(r.model || "");
+        const hit = key ? spMap.get(key) : null;
+        if (hit && hit.variants && hit.variants.length) {
+          const v = hit.variants[0];
+          return { ...r, listPrice: v.listPrice, cost: v.cost, found: true, note: "一致（SP）" };
+        }
+        return { ...r, found: false, note: "未一致" };
+      });
+    },
+    [spMap]
+  );
+
+  const handleLoadSpCsv = useCallback(
+    async (files) => {
+      if (!files?.length) return;
+      const file = files[0];
+      if (!file.name.toLowerCase().endsWith(".csv")) return toast.error("CSVファイルを選択してください");
+      try {
+        await loadSp(file);
+        toast.success("SP 価格マスタを読み込みました");
+        // 1優先: 既存見積があれば価格だけ再解決
+        setRows((prev) => resolvePricesFromCsv(prev));
+      } catch (e) {
+        console.error(e);
+        toast.error("CSVの読み込みに失敗しました");
       }
-    });
-    tdSel.appendChild(sel);
+    },
+    [loadSp, resolvePricesFromCsv]
+  );
 
-    // 各価格（表示+コピー）
-    const tdNR=document.createElement('td'); tdNR.className='right';
-    const nrStr = r.NR ? r.NR.toLocaleString('ja-JP') : "";
-    const wrapNR=document.createElement('div'); wrapNR.className='cell-flex end';
-    wrapNR.append(Object.assign(document.createElement('span'),{textContent:nrStr,className:'mono'}), makeCopyBtn(()=> nrStr));
-    tdNR.appendChild(wrapNR);
+  const handlePdfDrop = useCallback(async (files) => {
+    if (!files?.length) return;
+    const file = files[0];
+    if (!(file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"))) return toast.error("PDFファイルを選択してください");
+    setLoadingPdf(true);
+    try {
+      const text = await extractTextFromPdf(file);
+      if (!text) toast.error("画像ベースのため表示エラー");
+      setPdfText(text || "");
+      if (text) {
+        // 2優先: 既存見積があっても PDF 由来で置き換え → 3(編集)へ
+        const nextModels = parseModelList(text);
+        const nextRows = buildRowsFromModels(nextModels);
+        setRows(nextRows);
+        setInplaceEdit(true);
+        toast.message("PDFを優先して見積表を更新しました（2→3）");
+      }
+    } catch (e) {
+      toast.error("PDF抽出に失敗しました");
+    } finally {
+      setLoadingPdf(false);
+    }
+  }, [buildRowsFromModels]);
 
-    const tdSP=document.createElement('td'); tdSP.className='right';
-    const spStr = r.SP ? r.SP.toLocaleString('ja-JP') : "";
-    const wrapSP=document.createElement('div'); wrapSP.className='cell-flex end';
-    wrapSP.append(Object.assign(document.createElement('span'),{textContent:spStr,className:'mono'}), makeCopyBtn(()=> spStr));
-    tdSP.appendChild(wrapSP);
+  const models = useMemo(() => parseModelList(pdfText), [pdfText]);
 
-    const tdHNR=document.createElement('td'); tdHNR.className='right';
-    const hnrStr = r.HNR ? r.HNR.toLocaleString('ja-JP') : "";
-    const wrapHNR=document.createElement('div'); wrapHNR.className='cell-flex end';
-    wrapHNR.append(Object.assign(document.createElement('span'),{textContent:hnrStr,className:'mono'}), makeCopyBtn(()=> hnrStr));
-    tdHNR.appendChild(wrapHNR);
+  // 行追加（編集モード限定）
+  const addRow = useCallback(() => {
+    setRows((prev) => [
+      ...prev,
+      { id: genId(), model: "", listPrice: "", cost: "", found: false, note: "手入力", show: true },
+    ]);
+  }, []);
 
-    // 状態
-    const tdState=document.createElement('td'); tdState.innerHTML = r.ok?'<span class="ok">一致</span>':'<span class="warn">未一致</span>';
+  // 行削除
+  const deleteRow = useCallback((id) => {
+    setRows((prev) => prev.filter((r) => r.id !== id));
+  }, []);
 
-    tr.appendChild(Object.assign(document.createElement('td'),{textContent:String(r.idx)}));
-    tr.appendChild(tdPdf);
-    tr.appendChild(tdSel);
-    tr.appendChild(tdNR);
-    tr.appendChild(tdSP);
-    tr.appendChild(tdHNR);
-    tr.appendChild(tdState);
-    tr.children[1].appendChild(wrapPdf);
+  const handleEstimate = useCallback(() => {
+    // 3: 決定 → 1(CSV)で価格を反映（型式は手入力/PDFを保持）
+    if (inplaceEdit) {
+      if (!spMap) { toast.message("SPマスタ未読込のため反映スキップ"); setInplaceEdit(false); return; }
+      setRows((prev) => resolvePricesFromCsv(prev));
+      setInplaceEdit(false);
+      toast.success("編集を確定し、CSVに基づく価格を反映しました（1優先）");
+      return;
+    }
 
-    resultTbody.appendChild(tr);
-  });
-  exportCsv.disabled=false;
+    // 既存表示があれば編集へ
+    if (rows.length > 0) { setInplaceEdit(true); toast.message("直接編集モードに切替"); return; }
+
+    // 初回: 1が読み込まれている前提で2→3
+    if (!spMap) { toast.error("SP マスタ未読込です"); return; }
+    if (!models.length) { toast.error("PDFから型式を抽出してください"); return; }
+
+    const expanded = buildRowsFromModels(models);
+    setRows(expanded);
+    setInplaceEdit(true);
+    toast.message("PDF結果を読み込み、直接編集モードに切替");
+  }, [inplaceEdit, rows.length, spMap, models, buildRowsFromModels, resolvePricesFromCsv]);
+
+  const updateRow = useCallback((id, key, val) => {
+    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, [key]: val } : r)));
+  }, []);
+
+  return (
+    <div className="min-h-screen bg-white">
+      <div className="mx-auto max-w-6xl p-6">
+        <header className="mb-6 flex items-center justify-between">
+          <h1 className="text-2xl font-bold text-emerald-800">価格表示ツール（SP版）</h1>
+          <div className="text-xs text-emerald-700">背景：白 / 基調：ライトグリーン</div>
+        </header>
+
+        <Card className="mb-6 border-emerald-200">
+          <CardHeader>
+            <CardTitle className="text-emerald-800">1. SP価格マスタCSVの読み込み</CardTitle>
+          </CardHeader>
+          <CardContent className="grid grid-cols-1 gap-4">
+            <div className="space-y-2">
+              <DropZone accept=".csv" onFiles={handleLoadSpCsv} label={"SP.csv をドロップ / クリックで選択"} />
+              {spMeta && (
+                <div className="text-xs text-emerald-700">
+                  {spMeta.fileName} / 有効行: {spMeta.kept} / 一意型式: {spMeta.uniqueKeys}件
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="mb-6 border-emerald-200">
+          <CardHeader>
+            <CardTitle className="text-emerald-800">2. 型式の入力（PDF抽出）</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              <div className="text-sm font-medium text-emerald-900 mb-1">PDF</div>
+              <DropZone accept="application/pdf,.pdf" onFiles={handlePdfDrop} label="PDFをドロップ / クリックで選択" />
+              <div className="text-xs text-emerald-700">{loadingPdf ? "抽出中..." : pdfText ? `${pdfText.slice(0, 80)}...` : ""}</div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="mb-4 border-emerald-200">
+          <CardHeader>
+            <CardTitle className="text-emerald-800">3. 価格表の表示</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-wrap items-center gap-3 mb-4">
+              {inplaceEdit && (
+                <Button
+                  variant="secondary"
+                  className="bg-white hover:bg-emerald-50 text-emerald-700 border border-emerald-200"
+                  onClick={addRow}
+                >
+                  行を追加
+                </Button>
+              )}
+              <Button className="ml-auto bg-emerald-600 hover:bg-emerald-700 text-white" onClick={handleEstimate}>
+                {inplaceEdit ? "決定（見積表示）" : rows.length > 0 ? "再編集（見積表示）" : "見積表示"}
+              </Button>
+            </div>
+
+            <div className="overflow-auto rounded-xl border border-emerald-200">
+              <table className="w-full text-sm">
+                <thead className="bg-emerald-50 text-emerald-900">
+                  <tr>
+                    <th className="px-3 py-2 text-left">項目</th>
+                    <th className="px-3 py-2 text-left">型式</th>
+                    <th className="px-3 py-2 text-left">定価</th>
+                    <th className="px-3 py-2 text-left">仕入</th>
+                    <th className="px-3 py-2 text-left">備考</th>
+                    <th className="px-3 py-2 text-left">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="px-3 py-6 text-center text-emerald-700">
+                        ここに結果が表示されます
+                      </td>
+                    </tr>
+                  ) : (
+                    rows.map((r, idx) => (
+                      <tr key={r.id} className={r.found ? "" : "bg-orange-50"}>
+                        <td className="px-3 py-2 text-xs">{idx + 1}</td>
+                        <td className="px-3 py-2 whitespace-nowrap">
+                          {inplaceEdit ? (
+                            <input
+                              className="w-full px-2 py-1 border rounded-md"
+                              value={r.model}
+                              onChange={(e) => updateRow(r.id, "model", e.target.value)}
+                            />
+                          ) : (
+                            <span className="font-medium text-emerald-900">{r.model}</span>
+                          )}
+                          {!inplaceEdit && <CopyBtn value={r.model} />}
+                        </td>
+                        <td className="px-3 py-2">
+                          {inplaceEdit ? (
+                            <input
+                              className="w-full px-2 py-1 border rounded-md"
+                              value={r.listPrice}
+                              onChange={(e) => updateRow(r.id, "listPrice", e.target.value)}
+                              placeholder="定価"
+                            />
+                          ) : r.listPrice ? (
+                            <span>{jpYen(r.listPrice)}</span>
+                          ) : (
+                            <span className="text-gray-400">—</span>
+                          )}
+                          {!inplaceEdit && r.listPrice && <CopyBtn value={jpYen(r.listPrice)} />}
+                        </td>
+
+                        <td className="px-3 py-2">
+                          {inplaceEdit ? (
+                            <input
+                              className="w-full px-2 py-1 border rounded-md"
+                              value={r.cost}
+                              onChange={(e) => updateRow(r.id, "cost", e.target.value)}
+                              placeholder="仕入"
+                            />
+                          ) : r.cost ? (
+                            <span>{jpYen(r.cost)}</span>
+                          ) : (
+                            <span className="text-gray-400">—</span>
+                          )}
+                          {!inplaceEdit && r.cost && <CopyBtn value={jpYen(r.cost)} />}
+                        </td>
+
+                        <td className="px-3 py-2 text-xs">
+                          {r.note ? (
+                            <span className="text-emerald-700">{r.note}</span>
+                          ) : r.found ? (
+                            <span className="text-emerald-700">一致（SP）</span>
+                          ) : (
+                            <span className="text-orange-700">未一致</span>
+                          )}
+                        </td>
+
+                        <td className="px-3 py-2 text-xs">
+                          <Button
+                            variant="secondary"
+                            className="bg-white hover:bg-red-50 text-red-700 border border-red-200"
+                            onClick={() => deleteRow(r.id)}
+                          >
+                            削除
+                          </Button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+
+        <footer className="text-xs text-emerald-700 mt-6">
+          <ul className="list-disc pl-4 space-y-1">
+            <li>CSVは <b>A=型式, B=定価, C=仕入</b>。同一型式で異なる金額がある場合は<b>最大2種類</b>を保持・表示します。</li>
+            <li><b>TNHS-</b> で始まる見積番号、<b>TEL</b>・<b>FAX</b>、<b>DSP3000</b>、<b>PC/UL/COM</b> 始まりは自動で無視します。</li>
+            <li>型式末尾の <b>( ... )</b> は無視して照合します（例：ABC-123 (50Hz) → ABC-123）。</li>
+            <li>カタカナ（全角・半角）を含む型式は読み込み対象外です。</li>
+            <li>PDFはテキストベースのみ対応。画像ベースPDFは抽出不可です。</li>
+          </ul>
+        </footer>
+      </div>
+    </div>
+  );
 }
 
-/* ========= CSV出力（マッピング選択に従う / 併せてNR,SP,HNRも出力） ========= */
-exportCsv.addEventListener('click', ()=>{
-  const mapL = mapList.value; // 定価に使う列
-  const mapC = mapCost.value; // 仕入に使う列
-  const header=["No","型式(PDF/編集)","マスタ型式","NR","SP","HNR","定価("+mapL+")","仕入("+mapC+")"];
-  const lines=[header.join(",")];
-  state.matches.forEach(r=>{
-    const list = (r[mapL]??0);
-    const cost = (r[mapC]??0);
-    lines.push([
-      r.idx,
-      `"${r.pdfModel}"`,
-      `"${r.masterModel}"`,
-      r.NR, r.SP, r.HNR,
-      list, cost
-    ].join(","));
-  });
-  const blob=new Blob([lines.join("\n")],{type:"text/csv"});
-  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download="価格表示_NR_SP_HNR.csv"; a.click();
-});
-</script>
-</body>
-</html>
+// ---- Minimal smoke tests (dev only) ----
+(function runSmokeTests() {
+  try {
+    if (typeof window === "undefined") return;
+
+    const samples = ["TNHS-123", "TEL03", "FAX052", "DSP3000", "PC100", "UL200", "COM300", "ABC-123", "ＡＢＣ-１２３", "DEF-2(注記)"];
+    console.log("[価格表示ツール] isNoise:", samples.map((s) => [s, isNoise(s)]));
+
+    console.log("[価格表示ツール] normalizeKey:", normalizeKey("Abc- 123 (50Hz)")); // 期待: "ABC123"
+
+    const txt = "ABC-1 ABC-1 DEF-2(注記) ｱｲｳ-1 KATAKANA-ソ";
+    const list = parseModelList(txt);
+    console.log("[価格表示ツール] parseModelList (duplicates kept, kana filtered) =>", list);
+
+    console.log("[価格表示ツール] jpYen format:", [jpYen(0), jpYen(1234), jpYen("12,345"), jpYen("98,765.5円")]);
+
+    if (window.__RUN_COPY_TEST__ === true) {
+      safeCopy("COPY_TEST").then((ok) => console.log("[価格表示ツール] safeCopy result:", ok)).catch((e) => console.warn("safeCopy err", e));
+    } else {
+      console.log("[価格表示ツール] safeCopy test skipped (set window.__RUN_COPY_TEST__ = true to run)");
+    }
+  } catch (e) {
+    console.warn("[価格表示ツール] smoke tests failed:", e);
+  }
+})();
