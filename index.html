@@ -2,107 +2,147 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8" />
-  <title>日本語OCRツール（単一HTML / PDF & 画像対応）</title>
+  <title>価格表示ツール（テキストPDF専用 / 格子コピー対応 / 単一HTML）</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- PapaParse (CSV) -->
+  <script defer src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
   <style>
-    :root { --green:#059669; --green-2:#065f46; --line:#e5e7eb; }
-    body{margin:0;background:#fff;font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial;color:#111827}
-    .wrap{max-width:980px;margin:0 auto;padding:24px}
-    h1{margin:0 0 4px;color:var(--green-2);font-size:22px;font-weight:800}
-    .sub{color:#047857;font-size:12px}
-    .card{border:1px solid #a7f3d0;border-radius:16px;margin:20px 0;overflow:hidden}
-    .card h2{margin:0;padding:12px 16px;border-bottom:1px solid var(--line);color:var(--green-2);font-size:16px}
-    .body{padding:16px}
-    .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
-    .dz{border:2px dashed #6ee7b7;border-radius:16px;padding:22px;text-align:center;cursor:pointer;background:#fff}
-    .dz p{margin:0;color:#047857}
-    .btn{padding:8px 12px;border-radius:10px;border:1px solid #a7f3d0;background:#fff;color:#047857;font-weight:700;cursor:pointer}
-    .btn.primary{background:var(--green);border-color:var(--green);color:#fff}
-    .btn:disabled{opacity:.5;cursor:not-allowed}
-    .ctrls{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:10px 0}
-    .ctrls label{font-size:13px;color:#374151}
-    .ctrls input,.ctrls select{padding:6px 8px;border:1px solid #cbd5e1;border-radius:8px}
-    textarea{width:100%;min-height:320px;padding:12px;border:1px solid #cbd5e1;border-radius:12px;font-family:ui-monospace,Consolas,Menlo,monospace}
-    .prog{height:8px;background:#ecfeff;border:1px solid #bae6fd;border-radius:999px;overflow:hidden}
-    .bar{height:100%;width:0;background:#0ea5e9;transition:width .2s}
-    .hint{font-size:12px;color:#475569;margin-top:6px}
-    .toast{position:fixed;right:16px;bottom:16px;background:#111827;color:#fff;padding:10px 14px;border-radius:10px;box-shadow:0 10px 15px rgba(0,0,0,.2);opacity:0;transform:translateY(8px);transition:all .2s;z-index:60}
-    .toast.show{opacity:1;transform:translateY(0)}
-    .toast.err{background:#9f1239}
-    .small{font-size:12px;color:#6b7280}
+    body { margin:0; background:#fff; font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; color:#111827; }
+    .wrap { max-width:1080px; margin:0 auto; padding:24px; }
+    h1 { font-size:22px; color:#065f46; margin:0 0 4px; font-weight:800; }
+    .sub { font-size:12px; color:#047857; }
+    .card { border:1px solid #a7f3d0; border-radius:16px; margin:20px 0; overflow:hidden; }
+    .card h2 { margin:0; padding:12px 16px; border-bottom:1px solid #e5e7eb; color:#065f46; font-size:16px; }
+    .body { padding:16px; }
+    .row { display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
+    .dz { border:2px dashed #6ee7b7; border-radius:16px; padding:22px; text-align:center; cursor:pointer; background:#fff; }
+    .dz p { margin:0; color:#047857; }
+    .btn { padding:8px 12px; border-radius:10px; border:1px solid #a7f3d0; background:#fff; color:#047857; font-weight:700; cursor:pointer; }
+    .btn.primary { background:#059669; border-color:#059669; color:#fff; }
+    .btn.danger { border-color:#fecaca; color:#b91c1c; }
+    .btn:disabled { opacity:.5; cursor:not-allowed; }
+    .tblwrap { overflow:auto; border:1px solid #a7f3d0; border-radius:12px; }
+    table { width:100%; border-collapse:collapse; table-layout:fixed; font-size:14px; }
+    thead { background:#ecfdf5; color:#065f46; }
+    th, td { border:1px solid #a7f3d0; padding:8px 10px; text-align:left; }
+    td.idx { width:50px; text-align:right; font-size:12px; }
+    td.model { white-space:nowrap; }
+    .muted { color:#9ca3af; }
+    .ok { color:#047857; }
+    .warn { color:#9a3412; }
+    .row-warn { background:#fff7ed; }
+    .toolbar { display:flex; align-items:center; gap:12px; margin-bottom:12px; }
+    .toast { position:fixed; right:16px; bottom:16px; background:#111827; color:#fff; padding:10px 14px; border-radius:10px; box-shadow:0 10px 15px rgba(0,0,0,.2); opacity:0; transform:translateY(8px); transition:all .2s; z-index:60; }
+    .toast.error { background:#9f1239; }
+    .toast.show { opacity:1; transform:translateY(0); }
+    .dlg-mask { position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,.3); padding:16px; z-index:50; }
+    .dlg { width:min(720px,95vw); background:#fff; border:1px solid #e5e7eb; border-radius:14px; overflow:hidden; box-shadow:0 10px 30px rgba(0,0,0,.25); }
+    .dlg-hd { display:flex; align-items:center; justify-content:space-between; padding:10px 14px; border-bottom:1px solid #e5e7eb; }
+    .dlg-tt { font-weight:600; color:#064e3b; }
+    .dlg-bd { padding:12px; }
+    .dlg-bd p { margin:0 0 8px; font-size:12px; color:#065f46; }
+    .dlg-bd textarea { width:100%; height:320px; padding:10px; border:1px solid #e5e7eb; border-radius:8px; font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size:13px; }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <header style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:8px">
+    <header style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
       <div>
-        <h1>日本語OCRツール</h1>
-        <div class="sub">PDF（テキスト/画像）・画像（PNG/JPG）対応 / 単一HTML / GitHub Pages可</div>
+        <h1>価格表示ツール（テキストPDF専用 / 格子コピー対応）</h1>
+        <div class="sub">背景：白 / 基調：ライトグリーン</div>
       </div>
     </header>
 
     <section class="card">
-      <h2>1. 入力</h2>
+      <h2>1. 価格マスタCSVの読み込み</h2>
       <div class="body">
-        <div class="row">
-          <div id="drop" class="dz" tabindex="0">
-            <p>PDFや画像をドロップ / クリックで選択</p>
-            <input id="file" type="file" accept="application/pdf,image/png,image/jpeg,.pdf" style="display:none" />
-          </div>
+        <div id="csvDz" class="dz" tabindex="0">
+          <p>master.csv をドロップ / クリックで選択（縦持ち or 横持ち: SP/NR/HNR 同梱可）</p>
+          <input id="csvInput" type="file" accept=".csv" style="display:none" />
         </div>
-        <div class="ctrls">
-          <label>言語:
-            <select id="lang">
-              <option value="jpn+eng">日本語＋英語（推奨）</option>
-              <option value="jpn">日本語のみ（やや速い）</option>
-              <option value="eng">英語のみ（速い）</option>
-            </select>
-          </label>
-          <label>OCR対象ページ（PDF）:
-            <input id="maxPages" type="number" min="1" max="20" value="3" style="width:70px" />
-          </label>
-          <label>拡大率:
-            <input id="scale" type="number" step="0.1" min="1" max="3" value="1.8" style="width:70px" />
-          </label>
-          <button id="run" class="btn primary" disabled>OCR開始</button>
-        </div>
-        <div class="prog"><div id="bar" class="bar"></div></div>
-        <div id="hint" class="hint"></div>
+        <div id="csvMeta" class="sub" style="margin-top:8px;"></div>
       </div>
     </section>
 
     <section class="card">
-      <h2>2. 結果</h2>
+      <h2>2. 型式の入力（PDF抽出）</h2>
       <div class="body">
-        <textarea id="out" placeholder="ここにOCR結果が表示されます"></textarea>
-        <div class="row" style="margin-top:10px">
-          <button id="copy" class="btn">コピー</button>
-          <button id="save" class="btn">.txt保存</button>
-          <span id="meta" class="small"></span>
+        <div id="pdfDz" class="dz" tabindex="0">
+          <p>PDFをドロップ / クリックで選択（テキストベースPDFのみ対応）</p>
+          <input id="pdfInput" type="file" accept="application/pdf,.pdf" style="display:none" />
         </div>
+        <div id="pdfHint" class="sub" style="margin-top:8px;"></div>
       </div>
     </section>
 
     <section class="card">
-      <h2>Tips</h2>
-      <div class="body small">
-        ・GitHub Pages や HTTPS 環境推奨（Clipboard API などの制約回避）<br>
-        ・日本語の認識精度が悪いときは「拡大率」を 2.0〜2.5 に上げてください（重くなります）<br>
-        ・超巨大PDFは「OCR対象ページ」を絞って部分確認→必要に応じて増やすのが実務的です
+      <h2>3. 見積表（縦列コピーはヘッダの「コピー」ボタン）</h2>
+      <div class="body">
+        <div class="toolbar">
+          <button id="addRowBtn" class="btn" style="display:none;">行を追加</button>
+          <button id="estimateBtn" class="btn primary" style="margin-left:auto;">見積表示</button>
+        </div>
+        <div class="tblwrap">
+          <table id="grid">
+            <!-- 幅調整：型式を広め、定価/仕入を狭め -->
+            <colgroup>
+              <col style="width:50px" />
+              <col style="width:50%" />
+              <col style="width:12%" />
+              <col style="width:12%" />
+              <col style="width:16%" />
+              <col style="width:80px" />
+            </colgroup>
+            <thead>
+              <tr>
+                <th>項目</th>
+                <th>型式 <button class="btn" data-copycol="1">コピー</button></th>
+                <th>定価 <button class="btn" data-copycol="2">コピー</button></th>
+                <th>仕入 <button class="btn" data-copycol="3">コピー</button></th>
+                <th>備考</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="tbody">
+              <tr><td colspan="6" style="padding:24px; text-align:center; color:#047857;">ここに結果が表示されます</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </section>
+
+    <footer class="sub" style="margin-top:24px;">
+      <ul style="margin:0; padding-left:16px;">
+        <li>CSVは <b>縦持ち: 型式, 定価, 仕入, 種別(SP/NR/HNR)</b> または <b>横持ち: 型式, SP定価, SP仕入, NR定価, NR仕入, HNR定価, HNR仕入</b> に対応。各種別で<b>最大2種類</b>を保持・表示します。</li>
+        <li><b>TNHS- / TEL / FAX / DSP3000 / PC / UL / COM</b> は自動で無視します。型式末尾の <b>( ... )</b> は照合時に無視します。</li>
+        <li>ひらがな・漢字・カタカナ（全角・半角）を含む型式は読み込み対象外。<b>PDFはテキストベースのみ対応（画像ベースは抽出不可）</b>。</li>
+        <li>列コピーはヘッダの「コピー」ボタンから。失敗時は手動コピー用のダイアログが開きます。</li>
+      </ul>
+    </footer>
+  </div>
+
+  <!-- 手動コピー Dialog -->
+  <div id="dlgMask" class="dlg-mask" role="dialog" aria-modal="true">
+    <div class="dlg">
+      <div class="dlg-hd">
+        <div id="dlgTitle" class="dlg-tt"></div>
+        <button id="dlgClose" class="btn">閉じる</button>
+      </div>
+      <div class="dlg-bd">
+        <p>全選択済みです。Ctrl/Cmd+C でコピーし、Excelの結合セル先頭に貼り付けてください。</p>
+        <textarea id="dlgText" readonly></textarea>
+      </div>
+    </div>
   </div>
 
   <div id="toast" class="toast"></div>
 
-  <!-- ライブラリ（CDN） -->
+  <!-- pdf.js を動的ロード（テキスト抽出のみ利用） -->
   <script>
-    // 動的ロード（順次）
     const loadScript = (src) => new Promise((res, rej) => {
       const s = document.createElement("script"); s.src = src; s.async = true; s.onload = res; s.onerror = rej; document.head.appendChild(s);
     });
-
-    async function ensurePdfJs() {
+    async function ensurePdfJsLoaded() {
       if (window.pdfjsLib?.getDocument) return true;
       await loadScript("https://cdn.jsdelivr.net/npm/pdfjs-dist@4.6.82/build/pdf.min.js");
       try {
@@ -110,219 +150,379 @@
       } catch {}
       return true;
     }
-    async function ensureTess() {
-      if (window.Tesseract) return true;
-      await loadScript("https://cdn.jsdelivr.net/npm/tesseract.js@5.0.5/dist/tesseract.min.js");
-      return true;
-    }
   </script>
 
   <script>
-    // UI refs
-    const drop = document.getElementById("drop");
-    const file = document.getElementById("file");
-    const runBtn = document.getElementById("run");
-    const out = document.getElementById("out");
-    const copyBtn = document.getElementById("copy");
-    const saveBtn = document.getElementById("save");
-    const hint = document.getElementById("hint");
-    const bar = document.getElementById("bar");
-    const meta = document.getElementById("meta");
-    const langSel = document.getElementById("lang");
-    const maxPagesInput = document.getElementById("maxPages");
-    const scaleInput = document.getElementById("scale");
-    const toastEl = document.getElementById("toast");
+  /* ===== エラーフェンス ===== */
+  window.addEventListener("error", (e) => { console.error(e.error || e); Toast("実行時エラー: " + (e.message || "unknown"), "error"); });
+  window.addEventListener("unhandledrejection", (e) => { console.error(e.reason || e); Toast("Promiseエラー: " + (e.reason?.message || "unknown"), "error"); });
 
-    let currentFile = null;
+  /* ===== Toast ===== */
+  const Toast = (() => {
+    const el = document.getElementById("toast");
+    let t = null;
+    return (msg, kind="normal") => {
+      el.textContent = msg;
+      el.classList.remove("error","show");
+      if (kind === "error") el.classList.add("error");
+      void el.offsetWidth;
+      el.classList.add("show");
+      clearTimeout(t);
+      t = setTimeout(()=> el.classList.remove("show"), 1800);
+    };
+  })();
 
-    // Toast
-    let toastTimer = null;
-    function toast(msg, kind="") {
-      toastEl.textContent = msg;
-      toastEl.classList.remove("err","show");
-      if (kind === "error") toastEl.classList.add("err");
-      void toastEl.offsetWidth;
-      toastEl.classList.add("show");
-      clearTimeout(toastTimer);
-      toastTimer = setTimeout(()=> toastEl.classList.remove("show"), 1800);
-    }
+  /* ===== Clipboard ===== */
+  async function tryWriteClipboard(text) {
+    try {
+      if (navigator && navigator.clipboard && window && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch {}
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed"; ta.style.top = "-1000px"; ta.style.left = "-1000px";
+      document.body.appendChild(ta);
+      ta.focus(); ta.select(); ta.setSelectionRange(0, ta.value.length);
+      const ok = document.execCommand && document.execCommand("copy");
+      document.body.removeChild(ta);
+      if (ok) return true;
+    } catch {}
+    return false;
+  }
 
-    // Clipboard
-    async function copyText(text) {
-      try {
-        if (navigator?.clipboard && window?.isSecureContext) {
-          await navigator.clipboard.writeText(text);
-          return true;
-        }
-      } catch {}
-      try {
-        const ta = document.createElement("textarea");
-        ta.value = text; ta.setAttribute("readonly","");
-        ta.style.position="fixed"; ta.style.top="-1000px"; ta.style.left="-1000px";
-        document.body.appendChild(ta); ta.focus(); ta.select(); ta.setSelectionRange(0, ta.value.length);
-        const ok = document.execCommand && document.execCommand("copy");
-        document.body.removeChild(ta); return !!ok;
-      } catch { return false; }
-    }
+  /* ===== Helpers ===== */
+  const stripParen = (s) => String(s ?? "").replace(/\([^)]*\)/g, "").trim();
+  const isNoise = (s) => /^(TNHS-|TEL|FAX|PC|UL|COM)/i.test(String(s).trim()) || /^DSP3000$/i.test(String(s).trim());
+  const isValidModel = (s) => { const b = stripParen(s); if (!/^[A-Z]/.test(b)) return false; if (/[ぁ-んァ-ヶーｦ-ﾟ一-龯々]/.test(b)) return false; return true; };
+  const normalizeKey = (s) => stripParen(s).toUpperCase().replace(/[-\s]/g, "");
+  const jpYen = (n) => { const num = parseFloat(String(n ?? "").toString().replace(/[^0-9.-]/g, "")); if (isNaN(num)) return ""; return new Intl.NumberFormat("ja-JP").format(num); };
 
-    // 入力イベント
-    drop.addEventListener("click", ()=> file.click());
-    drop.addEventListener("dragover", e => e.preventDefault());
-    drop.addEventListener("drop", (e)=>{ e.preventDefault(); handleFile(e.dataTransfer.files?.[0]); });
-    file.addEventListener("change", (e)=> handleFile(e.target.files?.[0]));
+  function parseModelList(text) {
+    if (!text) return [];
+    return text.split(/[\n,;\t\s]+/).map(x => stripParen(x)).map(x => String(x).trim())
+      .filter(x => Boolean(x) && !isNoise(x) && isValidModel(x));
+  }
 
-    async function handleFile(f){
-      if (!f) return;
-      currentFile = f;
-      runBtn.disabled = false;
-      hint.textContent = `${f.name} / ${(f.size/1024/1024).toFixed(2)} MB`;
-      out.value = "";
-      meta.textContent = "";
-      bar.style.width = "0%";
-      toast("ファイルを読み込みました");
-    }
-
-    // 進捗表示
-    function setProgress(p) {
-      bar.style.width = Math.max(0, Math.min(100, p)) + "%";
-    }
-
-    // OCR 本体
-    async function runOcr() {
-      if (!currentFile) { toast("ファイルを選択してください","error"); return; }
-      runBtn.disabled = true; setProgress(0); out.value = ""; meta.textContent = ""; hint.textContent = "初期化中…";
-
-      const lang = langSel.value || "jpn+eng";
-      const isPdf = /pdf$/i.test(currentFile.type) || /\.pdf$/i.test(currentFile.name);
-      const startedAt = performance.now();
-
-      try {
-        await ensureTess();
-        if (isPdf) await ensurePdfJs();
-
-        let text = "";
-        if (isPdf) {
-          text = await extractPdfTextOrOcr(currentFile, { lang, maxPages: parseInt(maxPagesInput.value||"3",10), scale: parseFloat(scaleInput.value||"1.8") });
-        } else {
-          text = await ocrImage(currentFile, { lang, scale: parseFloat(scaleInput.value||"1.8") });
-        }
-
-        if (!text) {
-          hint.textContent = "抽出結果が空でした";
-          toast("抽出に失敗しました","error");
-        } else {
-          out.value = text.trim();
-          hint.textContent = "完了";
-          toast("OCR完了");
-        }
-      } catch (e) {
-        console.error(e);
-        toast("実行中にエラーが発生しました","error");
-        hint.textContent = "エラー";
-      } finally {
-        const ms = Math.round(performance.now() - startedAt);
-        meta.textContent = `処理時間: ${(ms/1000).toFixed(1)}s`;
-        runBtn.disabled = false;
-        setProgress(100);
+  // PDFの同一行から「品名：型式」を推定（左側に日本語があれば採用）
+  function labelFromPdfText(model, pdfText) {
+    const m = stripParen(model || ""); if (!m) return "";
+    const lines = String(pdfText || "").split(/\r?\n+/);
+    for (const raw of lines) {
+      const line = raw.trim(); if (!line) continue;
+      const idx = line.indexOf(m); if (idx === -1) continue;
+      const left = line.slice(0, idx).trim();
+      if (/[ぁ-んァ-ヶｦ-ﾟ一-龯々]/.test(left)) {
+        const name = left.replace(/[:：]+\s*$/, "").replace(/^品名[:：]?\s*/, "").slice(-40).trim();
+        if (name) return `${name}：${m}`;
       }
     }
+    return m;
+  }
 
-    // PDF: テキスト抽出→空ならOCR
-    async function extractPdfTextOrOcr(file, { lang, maxPages=3, scale=1.8 }) {
-      let text = "";
-      try {
-        const buf = await file.arrayBuffer();
-        const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
-        let collected = 0;
-        for (let i=1;i<=pdf.numPages;i++){
-          const page = await pdf.getPage(i);
-          const content = await page.getTextContent();
-          const chunk = content.items.map(it => (it.str ? it.str : "")).join("\n");
-          if (chunk.trim()) collected++;
-          text += chunk + "\n";
-          setProgress(Math.min(50, (i/pdf.numPages)*50));
-          if (i>=3 && collected>0 && text.length>1000) break; // 軽量化
-        }
-        text = (text||"").trim();
-        if (text) return text;
-      } catch (e) {
-        console.warn("pdf text extract failed, fallback to OCR", e);
-      }
-      // OCR フォールバック
-      return await ocrPdf(file, { lang, maxPages, scale, startProgress:50 });
-    }
+  /* ===== State ===== */
+  let CSV_MAP = null;   // Map<key, { model, variantsByType }>
+  let PDF_TEXT = "";
+  let ROWS = [];
+  let INPLACE = false;
 
-    // PDF OCR
-    async function ocrPdf(file, { lang="jpn+eng", maxPages=3, scale=1.8, startProgress=0 } = {}) {
+  /* ===== CSV ===== */
+  function parseCsvToMap(file) {
+    return new Promise((resolve, reject) => {
+      if (!window.Papa || !Papa.parse) return reject(new Error("Papa not loaded"));
+      Papa.parse(file, {
+        header:false, skipEmptyLines:true, encoding:"UTF-8",
+        complete: (res) => {
+          const rows = res.data;
+          const m = new Map(); let kept = 0; const byTypeCount = { SP:0, NR:0, HNR:0 };
+          const ensureEntry = (key, model) => { const cur = m.get(key); if (cur) return cur;
+            const entry = { model:String(model).trim(), variantsByType:{ SP:[], NR:[], HNR:[] } }; m.set(key, entry); return entry; };
+          const isHeaderRow = (cells) => { const c0 = String(cells?.[0] ?? "").toUpperCase(); return ["MODEL","品番","型式"].some(h => c0.includes(h)); };
+          for (const row of rows) {
+            if (!row || row.length===0) continue; if (isHeaderRow(row)) continue;
+            const rawModel = row?.[0]; if (!rawModel) continue;
+            const model = stripParen(rawModel); if (isNoise(model) || !isValidModel(model)) continue;
+            const key = normalizeKey(model);
+            const hasTypeCol = row.length>=4 && String(row[3]||"").trim()!=="";
+            const looksWide = row.length>=6 && (String(row[1]||"")!=="" || String(row[3]||"")!=="" || String(row[5]||"")!=="");
+            if (hasTypeCol && !looksWide) {
+              const listPrice = row?.[1] ?? ""; const cost = row?.[2] ?? "";
+              let type = String(row?.[3] ?? "SP").toUpperCase().replace(/[^A-Z]/g, ""); if (!["SP","NR","HNR"].includes(type)) type = "SP";
+              const entry = ensureEntry(key, model); const arr = entry.variantsByType[type];
+              const sig = String(listPrice)+"|||"+String(cost); const hasSame = arr.some(v => (String(v.listPrice)+"|||"+String(v.cost))===sig);
+              if (!hasSame && arr.length<2) { arr.push({listPrice, cost}); kept++; byTypeCount[type]++; }
+            } else {
+              const entry = ensureEntry(key, model);
+              const pushIf = (type, lp, cs) => { const listPrice = lp ?? ""; const cost = cs ?? ""; if (listPrice==="" && cost==="") return;
+                const arr = entry.variantsByType[type]; const sig = String(listPrice)+"|||"+String(cost);
+                const hasSame = arr.some(v => (String(v.listPrice)+"|||"+String(v.cost))===sig);
+                if (!hasSame && arr.length<2) { arr.push({listPrice, cost}); kept++; byTypeCount[type]++; } };
+              pushIf("SP", row?.[1], row?.[2]); pushIf("NR", row?.[3], row?.[4]); pushIf("HNR", row?.[5], row?.[6]);
+            }
+          }
+          resolve({ map:m, meta:{ rows:rows.length, kept, uniqueKeys:m.size, byTypeCount } });
+        },
+        error: (err) => reject(err)
+      });
+    });
+  }
+
+  /* ===== PDFテキスト抽出（テキストベースのみ、画像は不可） ===== */
+  async function extractTextFromPdf(file) {
+    await ensurePdfJsLoaded();
+    try {
       const buf = await file.arrayBuffer();
       const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
-
-      const pages = Math.min(pdf.numPages, Math.max(1, maxPages));
-      const langPath = "https://tessdata.projectnaptha.com/4.0.0";
-      let outText = "";
-
-      for (let i=1;i<=pages;i++){
+      let text = "";
+      let collected = 0;
+      for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i);
-        const viewport = page.getViewport({ scale });
-        const canvas = document.createElement("canvas");
-        const ctx = canvas.getContext("2d", { willReadFrequently:true });
-        canvas.width = Math.ceil(viewport.width);
-        canvas.height = Math.ceil(viewport.height);
-        await page.render({ canvasContext: ctx, viewport }).promise;
-
-        hint.textContent = `OCR中 (${i}/${pages})…`;
-        const res = await Tesseract.recognize(canvas, lang, { langPath });
-        outText += (res?.data?.text || "") + "\n";
-
-        setProgress(startProgress + Math.round((i/pages) * (100-startProgress)));
+        const content = await page.getTextContent();
+        const chunk = content.items.map(it => (it.str ? it.str : "")).join("\n");
+        if (chunk.trim()) collected++;
+        text += chunk + "\n";
+        if (i >= 3 && collected > 0 && text.length > 1000) break; // 軽量化
       }
-      return outText.trim();
+      text = (text || "").trim();
+      if (!text) {
+        Toast("画像ベースのため抽出できません（テキストなし）", "error");
+      }
+      return text;
+    } catch (e) {
+      console.error(e);
+      Toast("PDF抽出に失敗しました", "error");
+      return "";
     }
+  }
 
-    // 画像 OCR
-    async function ocrImage(file, { lang="jpn+eng", scale=1.8 } = {}) {
-      const img = await readImage(file);
-      // 画像の最長辺を scale 倍に（大きすぎる画像は軽く縮小）
-      const maxW = img.width * scale, maxH = img.height * scale;
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.min(maxW, 2200);
-      canvas.height = Math.min(maxH, 2200 * (img.height/img.width));
-      const ctx = canvas.getContext("2d", { willReadFrequently:true });
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      hint.textContent = "OCR中…";
-      const langPath = "https://tessdata.projectnaptha.com/4.0.0";
-      const res = await Tesseract.recognize(canvas, lang, { langPath });
-      setProgress(100);
-      return (res?.data?.text || "").trim();
+  /* ===== UI refs ===== */
+  const csvDz = document.getElementById("csvDz");
+  const csvInput = document.getElementById("csvInput");
+  const csvMeta = document.getElementById("csvMeta");
+  const pdfDz = document.getElementById("pdfDz");
+  const pdfInput = document.getElementById("pdfInput");
+  const pdfHint = document.getElementById("pdfHint");
+  const addRowBtn = document.getElementById("addRowBtn");
+  const estimateBtn = document.getElementById("estimateBtn");
+  const tbody = document.getElementById("tbody");
+  const grid = document.getElementById("grid");
+  const dlgMask = document.getElementById("dlgMask");
+  const dlgTitle = document.getElementById("dlgTitle");
+  const dlgText = document.getElementById("dlgText");
+  const dlgClose = document.getElementById("dlgClose");
+
+  function openDialog(title, text) { dlgTitle.textContent = title; dlgText.value = text; dlgMask.style.display = "flex"; dlgText.focus(); dlgText.select(); }
+  function closeDialog(){ dlgMask.style.display = "none"; }
+
+  /* ===== 表描画 ===== */
+  function escapeHtml(s){ return String(s ?? "").replace(/[&<>"']/g, m=>({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[m])); }
+  function renderRows() {
+    if (!ROWS.length) {
+      tbody.innerHTML = '<tr><td colspan="6" style="padding:24px; text-align:center; color:#047857;">ここに結果が表示されます</td></tr>';
+      addRowBtn.style.display = INPLACE ? "" : "none";
+      estimateBtn.textContent = "見積表示";
+      return;
     }
+    const rowsHtml = ROWS.map((r, idx) => {
+      const rowCls = r.found ? "" : "row-warn";
+      const modelCell = INPLACE
+        ? `<input data-id="${r.id}" data-k="model" value="${escapeHtml(r.model)}" style="width:100%; padding:6px 8px; border:1px solid #e5e7eb; border-radius:6px;" />`
+        : `<span style="font-weight:600; color:#064e3b;">${r.modelLabel ? "品名・型式　" + escapeHtml(r.modelLabel) : escapeHtml(r.model)}</span>`;
+      const listCell = INPLACE
+        ? `<input data-id="${r.id}" data-k="listPrice" value="${escapeHtml(r.listPrice)}" placeholder="定価" style="width:100%; padding:6px 8px; border:1px solid #e5e7eb; border-radius:6px;" />`
+        : (r.listPrice ? `<span>${escapeHtml(jpYen(r.listPrice))}</span>` : `<span class="muted">—</span>`);
+      const costCell = INPLACE
+        ? `<input data-id="${r.id}" data-k="cost" value="${escapeHtml(r.cost)}" placeholder="仕入" style="width:100%; padding:6px 8px; border:1px solid #e5e7eb; border-radius:6px;" />`
+        : (r.cost ? `<span>${escapeHtml(jpYen(r.cost))}</span>` : `<span class="muted">—</span>`);
+      const noteCell = r.note ? `<span class="${r.found ? "ok":"warn"}">${escapeHtml(r.note)}</span>` : (r.found ? `<span class="ok">一致</span>` : `<span class="warn">未一致</span>`);
+      return `
+        <tr class="${rowCls}">
+          <td class="idx">${idx + 1}</td>
+          <td class="model">${modelCell}</td>
+          <td class="num">${listCell}</td>
+          <td class="num">${costCell}</td>
+          <td>${noteCell}</td>
+          <td><button class="btn danger" data-del="${r.id}">削除</button></td>
+        </tr>
+      `;
+    }).join("");
+    tbody.innerHTML = rowsHtml;
+    addRowBtn.style.display = INPLACE ? "" : "none";
+    estimateBtn.textContent = INPLACE ? "決定（見積表示）" : "再編集（見積表示）";
+  }
 
-    function readImage(file){
-      return new Promise((resolve, reject)=>{
-        const img = new Image();
-        img.onload = ()=> resolve(img);
-        img.onerror = reject;
-        img.src = URL.createObjectURL(file);
+  /* ===== 行生成・価格解決 ===== */
+  function buildRowsFromModels(modelList) {
+    const pickType = (entry) => {
+      if (!entry) return { type:"SP", arr:[] };
+      if (entry.variantsByType) { for (const t of ["SP","NR","HNR"]) { const arr = entry.variantsByType[t]; if (arr && arr.length) return { type:t, arr }; } return { type:"SP", arr:[] }; }
+      return { type:"SP", arr: entry.variants || [] };
+    };
+    const out = [];
+    modelList.forEach((m, occIdx) => {
+      const key = normalizeKey(m);
+      const hit = CSV_MAP ? CSV_MAP.get(key) : null;
+      const picked = pickType(hit || null);
+      const variants = picked.arr.length ? picked.arr.slice(0,2) : [{ listPrice:"", cost:"" }];
+      variants.forEach((v, i) => {
+        out.push({
+          id: `${key}-${occIdx}-${i}`,
+          model: (hit?.model ?? stripParen(m)),
+          modelLabel: "", // 初回は空（型式のみ）。見積表示で付与。
+          listPrice: v.listPrice, cost: v.cost,
+          found: !!hit && picked.arr.length > 0,
+          note: (!!hit && picked.arr.length > 0) ? `一致（${picked.type})` : "未一致",
+          variantIndex: i, selectedType: picked.type,
+        });
       });
+    });
+    return out;
+  }
+
+  function resolvePricesFromCsv(prevRows) {
+    if (!CSV_MAP) return prevRows;
+    const pickType = (entry) => {
+      if (!entry) return { type:"SP", arr:[] };
+      if (entry.variantsByType) { for (const t of ["SP","NR","HNR"]) { const arr = entry.variantsByType[t]; if (arr && arr.length) return { type:t, arr }; } return { type:"SP", arr:[] }; }
+      return { type:"SP", arr: entry.variants || [] };
+    };
+    return prevRows.map(r => {
+      const key = normalizeKey(r.model || "");
+      const hit = key ? CSV_MAP.get(key) : null;
+      let type = r.selectedType; let arr = [];
+      if (hit?.variantsByType) {
+        arr = type ? (hit.variantsByType[type] || []) : [];
+        if (!arr.length) { const picked = pickType(hit); type = picked.type; arr = picked.arr; }
+      } else { const picked = pickType(hit || null); type = picked.type; arr = picked.arr; }
+      if (arr.length) { const vi = Number.isInteger(r?.variantIndex) ? r.variantIndex : 0; const v = arr[vi] || arr[0];
+        return { ...r, listPrice: v.listPrice, cost: v.cost, found:true, note:`一致（${type})`, selectedType:type }; }
+      return { ...r, found:false, note:"未一致", selectedType:type || r.selectedType };
+    });
+  }
+
+  /* ===== イベント ===== */
+  // CSV
+  const onCsvFile = async (f) => {
+    if (!f || !f.name?.toLowerCase().endsWith(".csv")) return Toast("CSVファイルを選択してください","error");
+    try {
+      const { map, meta } = await parseCsvToMap(f);
+      CSV_MAP = map;
+      document.getElementById("csvMeta").textContent = `${f.name} / 有効行: ${meta.kept} / 一意型式: ${meta.uniqueKeys}件`;
+      ROWS = resolvePricesFromCsv(ROWS);
+      renderRows();
+      Toast("価格マスタを読み込みました");
+    } catch (e) { console.error(e); Toast("CSVの読み込みに失敗しました","error"); }
+  };
+  csvDz.addEventListener("click", ()=> csvInput.click());
+  csvDz.addEventListener("dragover", e => e.preventDefault());
+  csvDz.addEventListener("drop", async (e) => { e.preventDefault(); onCsvFile(e.dataTransfer.files?.[0]); });
+  csvInput.addEventListener("change", async (e) => { onCsvFile(e.target.files?.[0]); });
+
+  // PDF
+  const onPdfFile = async (f) => {
+    if (!f || !(f.type === "application/pdf" || f.name?.toLowerCase().endsWith(".pdf"))) return Toast("PDFファイルを選択してください","error");
+    document.getElementById("pdfHint").textContent = "抽出中...";
+    try {
+      const text = await extractTextFromPdf(f);
+      if (!text) Toast("テキスト抽出結果が空です（画像ベースの可能性）","error");
+      PDF_TEXT = text || "";
+      document.getElementById("pdfHint").textContent = PDF_TEXT ? (PDF_TEXT.slice(0,80) + "...") : "";
+      if (PDF_TEXT) {
+        const models = parseModelList(PDF_TEXT);
+        ROWS = buildRowsFromModels(models);
+        INPLACE = true; renderRows();
+        Toast("PDFを優先して見積表を更新しました（型式のみ表示 → 後で品名付与）");
+        estimateBtn.textContent = "決定（見積表示）"; addRowBtn.style.display = "";
+      }
+    } catch (e) {
+      console.error(e);
+      Toast("PDF抽出に失敗しました","error");
+      document.getElementById("pdfHint").textContent = "";
     }
+  };
+  pdfDz.addEventListener("click", ()=> pdfInput.click());
+  pdfDz.addEventListener("dragover", e => e.preventDefault());
+  pdfDz.addEventListener("drop", async (e) => { e.preventDefault(); onPdfFile(e.dataTransfer.files?.[0]); });
+  pdfInput.addEventListener("change", async (e) => { onPdfFile(e.target.files?.[0]); });
 
-    // ボタン動作
-    runBtn.addEventListener("click", runOcr);
-    copyBtn.addEventListener("click", async ()=>{
-      const ok = await copyText(out.value || "");
-      toast(ok ? "コピーしました" : "コピーに失敗しました"+(window.isSecureContext?"":"（HTTPSで開くと成功しやすいです）"), ok?"":"error");
+  // 行追加・削除・編集
+  addRowBtn.addEventListener("click", () => {
+    ROWS.push({ id:`ROW-${Date.now()}-${Math.random().toString(36).slice(2,8)}`, model:"", modelLabel:"", listPrice:"", cost:"", found:false, note:"手入力", variantIndex:0, selectedType:undefined });
+    renderRows();
+  });
+  tbody.addEventListener("click", (e) => {
+    const delId = e.target.getAttribute?.("data-del");
+    if (delId) { ROWS = ROWS.filter(r => r.id !== delId); renderRows(); }
+  });
+  tbody.addEventListener("input", (e) => {
+    const id = e.target.getAttribute?.("data-id");
+    const k = e.target.getAttribute?.("data-k");
+    if (!id || !k) return;
+    const v = e.target.value;
+    ROWS = ROWS.map(r => {
+      if (r.id !== id) return r;
+      let nextVal = v;
+      if (k === "listPrice" || k === "cost") nextVal = String(v).replace(/^[^0-9-]+/, "");
+      return { ...r, [k]: nextVal };
     });
-    saveBtn.addEventListener("click", ()=>{
-      const blob = new Blob([out.value || ""], { type:"text/plain;charset=utf-8" });
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = "ocr_result.txt";
-      document.body.appendChild(a); a.click(); a.remove();
-    });
+  });
 
-    // 初期ロード（tess だけ先読みしておくと初回が早い）
-    (async () => {
-      try { await ensureTess(); } catch {}
-    })();
+  // 見積表示（編集終了 → 品名：型式を付与）
+  estimateBtn.addEventListener("click", () => {
+    if (INPLACE) {
+      ROWS = resolvePricesFromCsv(ROWS).map(r => ({ ...r, modelLabel: labelFromPdfText(r.model || "", PDF_TEXT) }));
+      INPLACE = false; renderRows();
+      Toast("編集を確定し、品名：型式で表示しました");
+      estimateBtn.textContent = "再編集（見積表示）"; addRowBtn.style.display = "none";
+      return;
+    }
+    if (ROWS.length > 0) {
+      INPLACE = true; renderRows();
+      Toast("直接編集モードに切替（表示は型式のみになります）");
+      estimateBtn.textContent = "決定（見積表示）"; addRowBtn.style.display = "";
+      return;
+    }
+    if (!CSV_MAP) { Toast("CSV マスタ未読込です","error"); return; }
+    if (!PDF_TEXT) { Toast("PDFから型式を抽出してください","error"); return; }
+    ROWS = buildRowsFromModels(parseModelList(PDF_TEXT));
+    INPLACE = true; renderRows();
+    Toast("PDF結果を読み込み、直接編集モードに切替");
+    estimateBtn.textContent = "決定（見積表示）"; addRowBtn.style.display = "";
+  });
+
+  // 列コピー（型式列は常に「品名：型式」でコピー。見つからなければ型式のみ。改行はCRLF）
+  grid.addEventListener("click", async (e) => {
+    const col = e.target.getAttribute?.("data-copycol");
+    if (!col) return;
+    const ci = Number(col);
+    const pick = (r) => {
+      if (ci === 1) {
+        const label = !INPLACE ? (r.modelLabel || labelFromPdfText(r.model || "", PDF_TEXT)) : labelFromPdfText(r.model || "", PDF_TEXT);
+        return String(label || r.model || "");
+      }
+      if (ci === 2) return r.listPrice ? jpYen(r.listPrice) : "";
+      if (ci === 3) return r.cost ? jpYen(r.cost) : "";
+      return "";
+    };
+    const text = ROWS.map(pick).join("\r\n");
+    if (!text) { Toast("列に有効な値がありません"); return; }
+    try {
+      const ok = await tryWriteClipboard(text);
+      if (ok) { Toast("コピーしました"); return; }
+      throw new Error("clipboard blocked");
+    } catch {
+      const title = (ci===1?"型式":ci===2?"定価":ci===3?"仕入":"列") + " 列のコピー用テキスト";
+      Toast("クリップボードに直接コピーできませんでした（ブラウザの制限）","error");
+      openDialog(title, text);
+    }
+  });
+
+  // Dialog close
+  dlgClose.addEventListener("click", closeDialog);
+  dlgMask.addEventListener("click", (e)=> { if (e.target === dlgMask) closeDialog(); });
   </script>
 </body>
 </html>
