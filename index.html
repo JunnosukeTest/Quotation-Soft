@@ -476,7 +476,7 @@ export default function App() {
     (ci: number) => {
       // 0:項目, 1:型式, 2:定価, 3:仕入, 4:備考, 5:操作
       const pick = (r: any) => {
-        if (ci === 1) return String(r.model ?? "");
+        if (ci === 1) return String(r.model || "");
         if (ci === 2) return r.listPrice ? jpYen(r.listPrice) : "";
         if (ci === 3) return r.cost ? jpYen(r.cost) : "";
         if (ci === 4) return String(r.note ?? "");
@@ -598,7 +598,7 @@ export default function App() {
                               style={{ width: "100%", padding: "6px 8px", border: "1px solid #e5e7eb", borderRadius: 6 }}
                             />
                           ) : (
-                            <span style={{ fontWeight: 600, color: "#064e3b" }}>{r.model}</span>
+                            <span style={{ fontWeight: 600, color: "#064e3b" }}>{r.modelLabel && r.modelLabel !== r.model ? `品名・型式　${r.modelLabel}` : r.model}</span>
                           )}
                         </td>
                         <td style={{ border: "1px solid #a7f3d0", padding: "8px 10px", fontVariantNumeric: "tabular-nums" }}>
