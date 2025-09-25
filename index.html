@@ -17,7 +17,8 @@ const jpYen = (n: any) => {
 const stripParen = (s: any) => String(s ?? "").replace(/\([^)]*\)/g, "").trim();
 
 // ノイズ: 見積番号/連絡先/型式ではないコードなど
-const isNoise = (s: any) => /^(TNHS-|TEL|FAX|PC|UL|COM)/i.test(String(s).trim()) || /^DSP3000$/i.test(String(s).trim());
+const isNoise = (s: any) =>
+  /^(TNHS-|TEL|FAX|PC|UL|COM)/i.test(String(s).trim()) || /^DSP3000$/i.test(String(s).trim());
 
 // 型式: 先頭英大文字、日本語（ひらがな・カタカナ（全/半）・漢字）を含まない
 const isValidModel = (s: any) => {
@@ -40,10 +41,39 @@ const parseModelList = (text: string) => {
     .filter((x) => Boolean(x) && !isNoise(x) && isValidModel(x));
 };
 
+// PDFテキストから「品名：型式」を推定（見つからなければ型式のみ）
+function labelFromPdfText(model: string, pdfText: string): string {
+  const m = stripParen(model);
+  if (!m) return "";
+  const lines = String(pdfText || "").split(/\r?\n+/);
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+    const idx = line.indexOf(m);
+    if (idx === -1) continue;
+    const left = line.slice(0, idx).trim();
+    const hasJP = /[ぁ-んァ-ヶｦ-ﾟ一-龯々]/.test(left);
+    if (hasJP) {
+      const name = left
+        .replace(/[:：]+\s*$/, "")
+        .replace(/^品名[:：]?\s*/, "")
+        .slice(-40)
+        .trim();
+      if (name) return `${name}：${m}`;
+    }
+  }
+  return m;
+}
+
 // クリップボード（まず Clipboard API、失敗時はフォールバックUI）
 async function tryWriteClipboard(text: string) {
   try {
-    if (typeof navigator !== "undefined" && (navigator as any).clipboard && typeof window !== "undefined" && (window as any).isSecureContext) {
+    if (
+      typeof navigator !== "undefined" &&
+      (navigator as any).clipboard &&
+      typeof window !== "undefined" &&
+      (window as any).isSecureContext
+    ) {
       await (navigator as any).clipboard.writeText(text);
       return true;
     }
@@ -69,11 +99,12 @@ async function tryWriteClipboard(text: string) {
 // ----------------------------------
 // CSV 読込（SP/NR/HNR 1ファイル対応: 縦持ち/横持ち）
 // ----------------------------------
-// 内部構造: Map<key, { model: string, variantsByType: { SP: Variant[]; NR: Variant[]; HNR: Variant[] } }>
-// 旧フォーマット（variantsのみ）も互換維持
-
 type Variant = { listPrice: string; cost: string };
-type Entry = { model: string; variantsByType?: Record<"SP" | "NR" | "HNR", Variant[]>; variants?: Variant[] };
+type Entry = {
+  model: string;
+  variantsByType?: Record<"SP" | "NR" | "HNR", Variant[]>;
+  variants?: Variant[];
+};
 
 function useSpCsvMap() {
   const [map, setMap] = useState<Map<string, Entry> | null>(null);
@@ -113,10 +144,9 @@ function useSpCsvMap() {
             if (isNoise(model) || !isValidModel(model)) continue;
             const key = normalizeKey(model);
 
-            // 縦持ち: MODEL, LIST, COST, TYPE
-            // 横持ち: MODEL, SP_LIST, SP_COST, NR_LIST, NR_COST, HNR_LIST, HNR_COST
             const hasTypeCol = row.length >= 4 && String(row[3] || "").trim() !== "";
-            const looksWide = row.length >= 6 && (String(row[1] || "") !== "" || String(row[3] || "") !== "" || String(row[5] || "") !== "");
+            const looksWide =
+              row.length >= 6 && (String(row[1] || "") !== "" || String(row[3] || "") !== "" || String(row[5] || "") !== "");
 
             if (hasTypeCol && !looksWide) {
               const listPrice = row?.[1] ?? "";
@@ -130,7 +160,7 @@ function useSpCsvMap() {
               if (!hasSame && arr.length < 2) {
                 arr.push({ listPrice, cost });
                 kept++;
-                byTypeCount[type]++;
+                (byTypeCount as any)[type]++;
               }
             } else {
               const entry = ensureEntry(key, model);
@@ -144,7 +174,7 @@ function useSpCsvMap() {
                 if (!hasSame && arr.length < 2) {
                   arr.push({ listPrice, cost });
                   kept++;
-                  byTypeCount[type]++;
+                  (byTypeCount as any)[type]++;
                 }
               };
               pushIf("SP", row?.[1], row?.[2]);
@@ -184,7 +214,15 @@ async function extractTextFromPdf(file: File) {
 // ----------------------------------
 // UI: DropZone / CopyDialog / Toast
 // ----------------------------------
-function DropZone({ onFiles, accept = "*", label = "ここにファイルをドロップ / クリックで選択" }: { onFiles: (files: File[]) => void; accept?: string; label?: string }) {
+function DropZone({
+  onFiles,
+  accept = "*",
+  label = "ここにファイルをドロップ / クリックで選択",
+}: {
+  onFiles: (files: File[]) => void;
+  accept?: string;
+  label?: string;
+}) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const onDrop = useCallback(
     (e: React.DragEvent<HTMLDivElement>) => {
@@ -199,15 +237,38 @@ function DropZone({ onFiles, accept = "*", label = "ここにファイルをド�
       onDragOver={(e) => e.preventDefault()}
       onDrop={onDrop}
       onClick={() => inputRef.current?.click()}
-      style={{ border: "2px dashed #6ee7b7", borderRadius: 16, padding: 24, textAlign: "center", cursor: "pointer", background: "#fff" }}
+      style={{
+        border: "2px dashed #6ee7b7",
+        borderRadius: 16,
+        padding: 24,
+        textAlign: "center",
+        cursor: "pointer",
+        background: "#fff",
+      }}
     >
       <p style={{ fontSize: 12, color: "#047857" }}>{label}</p>
-      <input ref={inputRef} type="file" accept={accept} style={{ display: "none" }} onChange={(e) => onFiles(Array.from(e.target.files || ([] as any)))} />
+      <input
+        ref={inputRef}
+        type="file"
+        accept={accept}
+        style={{ display: "none" }}
+        onChange={(e) => onFiles(Array.from(e.target.files || ([] as any)))}
+      />
     </div>
   );
 }
 
-function CopyDialog({ open, title, text, onClose }: { open: boolean; title: string; text: string; onClose: () => void }) {
+function CopyDialog({
+  open,
+  title,
+  text,
+  onClose,
+}: {
+  open: boolean;
+  title: string;
+  text: string;
+  onClose: () => void;
+}) {
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   useEffect(() => {
     if (open && taRef.current) {
@@ -217,15 +278,71 @@ function CopyDialog({ open, title, text, onClose }: { open: boolean; title: stri
   }, [open]);
   if (!open) return null;
   return (
-    <div style={{ position: "fixed", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,.3)", padding: 16, zIndex: 50 }}>
-      <div style={{ width: "min(720px,95vw)", background: "#fff", border: "1px solid #e5e7eb", borderRadius: 14, overflow: "hidden", boxShadow: "0 10px 30px rgba(0,0,0,.25)" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", borderBottom: "1px solid #e5e7eb" }}>
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "rgba(0,0,0,.3)",
+        padding: 16,
+        zIndex: 50,
+      }}
+    >
+      <div
+        style={{
+          width: "min(720px,95vw)",
+          background: "#fff",
+          border: "1px solid #e5e7eb",
+          borderRadius: 14,
+          overflow: "hidden",
+          boxShadow: "0 10px 30px rgba(0,0,0,.25)",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "10px 14px",
+            borderBottom: "1px solid #e5e7eb",
+          }}
+        >
           <div style={{ fontWeight: 600, color: "#064e3b" }}>{title}</div>
-          <button onClick={onClose} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #a7f3d0", background: "#fff", color: "#047857", fontWeight: 600 }}>閉じる</button>
+          <button
+            onClick={onClose}
+            style={{
+              padding: "6px 10px",
+              borderRadius: 8,
+              border: "1px solid #a7f3d0",
+              background: "#fff",
+              color: "#047857",
+              fontWeight: 600,
+            }}
+          >
+            閉じる
+          </button>
         </div>
         <div style={{ padding: 12 }}>
-          <p style={{ fontSize: 12, color: "#065f46", margin: "0 0 8px" }}>全選択済みです。Ctrl/Cmd+C でコピーし、Excelの結合セル先頭に貼り付けてください。</p>
-          <textarea ref={taRef} style={{ width: "100%", height: 320, padding: 10, border: "1px solid #e5e7eb", borderRadius: 8, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace", fontSize: 13 }} defaultValue={text} readOnly />
+          <p style={{ fontSize: 12, color: "#065f46", margin: "0 0 8px" }}>
+            全選択済みです。Ctrl/Cmd+C でコピーし、Excelの結合セル先頭に貼り付けてください。
+          </p>
+          <textarea
+            ref={taRef}
+            style={{
+              width: "100%",
+              height: 320,
+              padding: 10,
+              border: "1px solid #e5e7eb",
+              borderRadius: 8,
+              fontFamily:
+                "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+              fontSize: 13,
+            }}
+            defaultValue={text}
+            readOnly
+          />
         </div>
       </div>
     </div>
@@ -281,9 +398,13 @@ export default function App() {
   const [loadingPdf, setLoadingPdf] = useState(false);
   const [rows, setRows] = useState<any[]>([]);
   const [inplaceEdit, setInplaceEdit] = useState(false);
-  const [copyUI, setCopyUI] = useState<{ open: boolean; title: string; text: string }>({ open: false, title: "", text: "" });
+  const [copyUI, setCopyUI] = useState<{ open: boolean; title: string; text: string }>({
+    open: false,
+    title: "",
+    text: "",
+  });
 
-  // buildRowsFromModels: PDFの型式リスト→表示行を生成（CSVがあれば即価格も埋める）
+  // buildRowsFromModels: PDFの型式リスト→表示行を生成（初回は modelLabel を入れない＝型式のみ表示）
   const buildRowsFromModels = useCallback(
     (modelList: string[]) => {
       const pickType = (entry: Entry | undefined | null) => {
@@ -306,6 +427,8 @@ export default function App() {
         return variants.map((v, i) => ({
           id: `${key}-${occIdx}-${i}`,
           model: (hit?.model ?? stripParen(m)) as string,
+          // 初回（PDF読込直後）は modelLabel を入れない → 表示は型式のみ
+          modelLabel: "",
           listPrice: v.listPrice,
           cost: v.cost,
           found: Boolean(hit) && picked.arr.length > 0,
@@ -383,12 +506,13 @@ export default function App() {
     [loadSp, resolvePricesFromCsv, toast]
   );
 
-  // 2. PDF投入
+  // 2. PDF投入（初回は型式のみ表示）
   const handlePdfDrop = useCallback(
     async (files: File[]) => {
       if (!files?.length) return;
       const file = files[0];
-      if (!(file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"))) return toast("PDFファイルを選択してください", "error");
+      if (!(file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")))
+        return toast("PDFファイルを選択してください", "error");
       setLoadingPdf(true);
       try {
         const text = await extractTextFromPdf(file);
@@ -399,7 +523,7 @@ export default function App() {
           const nextRows = buildRowsFromModels(nextModels);
           setRows(nextRows);
           setInplaceEdit(true);
-          toast("PDFを優先して見積表を更新しました（2→3）");
+          toast("PDFを優先して見積表を更新しました（型式のみ表示 → 後で品名付与）");
         }
       } catch (e) {
         console.error(e);
@@ -411,11 +535,21 @@ export default function App() {
     [buildRowsFromModels, toast]
   );
 
-  // 行追加/削除/編集確定
+  // 行追加/削除
   const addRow = useCallback(() => {
     setRows((prev) => [
       ...prev,
-      { id: `ROW-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, model: "", listPrice: "", cost: "", found: false, note: "手入力", variantIndex: 0, selectedType: undefined },
+      {
+        id: `ROW-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        model: "",
+        modelLabel: "",
+        listPrice: "",
+        cost: "",
+        found: false,
+        note: "手入力",
+        variantIndex: 0,
+        selectedType: undefined,
+      },
     ]);
   }, []);
 
@@ -423,22 +557,28 @@ export default function App() {
     setRows((prev) => prev.filter((r) => r.id !== id));
   }, []);
 
+  // 3. 決定（見積表示）: CSVで価格解決・編集確定 → ここで「品名：型式」を埋める
   const handleEstimate = useCallback(() => {
+    // 編集中 → 確定に切替
     if (inplaceEdit) {
-      if (!spMap) {
-        toast("マスタ未読込のため反映スキップ");
-        setInplaceEdit(false);
-        return;
-      }
-      setRows((prev) => resolvePricesFromCsv(prev));
+      // CSV未読込でも「品名：型式」の付与は行う
+      setRows((prev) =>
+        resolvePricesFromCsv(prev).map((r) => {
+          const label = labelFromPdfText(r.model || "", pdfText);
+          return { ...r, modelLabel: label };
+        })
+      );
       setInplaceEdit(false);
-      toast("編集を確定し、CSVに基づく価格を反映しました");
+      toast("編集を確定し、品名：型式で表示しました");
       return;
     }
 
+    // すでに確定済み → 再編集
     if (rows.length > 0) {
       setInplaceEdit(true);
-      toast("直接編集モードに切替");
+      toast("直接編集モードに切替（表示は型式のみになります）");
+      // 再編集に入ると見た目をモデル優先に戻す（modelLabelは残しておくが表示条件で隠れる）
+      setRows((prev) => prev.map((r) => ({ ...r })));
       return;
     }
 
@@ -446,7 +586,6 @@ export default function App() {
       toast("CSV マスタ未読込です", "error");
       return;
     }
-
     if (!pdfText) {
       toast("PDFから型式を抽出してください", "error");
       return;
@@ -458,6 +597,7 @@ export default function App() {
     toast("PDF結果を読み込み、直接編集モードに切替");
   }, [inplaceEdit, rows.length, spMap, pdfText, buildRowsFromModels, resolvePricesFromCsv, toast]);
 
+  // セル編集
   const updateRow = useCallback((id: string, key: string, val: any) => {
     setRows((prev) =>
       prev.map((r) => {
@@ -471,12 +611,15 @@ export default function App() {
     );
   }, []);
 
-  // 列コピー（結合セル配慮：1列分を改行で整形。Clipboard失敗時はダイアログ表示）
+  // 列コピー（型式列は必ず「品名：型式」でコピー。見つからなければ型式のみ）
   const buildColumnText = useCallback(
     (ci: number) => {
-      // 0:項目, 1:型式, 2:定価, 3:仕入, 4:備考, 5:操作
       const pick = (r: any) => {
-        if (ci === 1) return String(r.model || "");
+        if (ci === 1) {
+          // 表示状態に関わらず、常に「品名：型式」を試みる
+          const label = r.modelLabel && !inplaceEdit ? r.modelLabel : labelFromPdfText(r.model || "", pdfText);
+          return String(label || r.model || "");
+        }
         if (ci === 2) return r.listPrice ? jpYen(r.listPrice) : "";
         if (ci === 3) return r.cost ? jpYen(r.cost) : "";
         if (ci === 4) return String(r.note ?? "");
@@ -484,7 +627,7 @@ export default function App() {
       };
       return rows.map(pick).join("\r\n"); // CRLF
     },
-    [rows]
+    [rows, pdfText, inplaceEdit]
   );
 
   const copyColumn = useCallback(
@@ -511,13 +654,13 @@ export default function App() {
   );
 
   // ----------------------------------
-  // Render
+  // Render（列幅調整: 項目=狭い / 型式=広い）
   // ----------------------------------
   return (
     <div style={{ minHeight: "100vh", background: "#fff" }}>
       <div style={{ maxWidth: 1080, margin: "0 auto", padding: 24 }}>
         <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
-          <h1 style={{ fontSize: 22, color: "#065f46", margin: 0, fontWeight: 700 }}>価格表示ツール（格子コピー対応・TSX版）</h1>
+          <h1 style={{ fontSize: 22, color: "#065f46", margin: 0, fontWeight: 700 }}>価格表示ツール（格子コピー対応）</h1>
           <div style={{ fontSize: 12, color: "#047857" }}>背景：白 / 基調：ライトグリーン</div>
         </header>
 
@@ -527,6 +670,8 @@ export default function App() {
           </div>
           <div style={{ padding: 16 }}>
             <DropZone accept=".csv" onFiles={handleLoadSpCsv} label={"master.csv をドロップ / クリックで選択（縦持ち or 横持ち: SP/NR/HNR 同梱可）"} />
+            {/* メタ表示 */}
+            {/* @ts-ignore */}
             {spMeta && (
               <div style={{ fontSize: 12, color: "#047857", marginTop: 8 }}>
                 {spMeta.fileName} / 有効行: {spMeta.kept} / 一意型式: {spMeta.uniqueKeys}件
@@ -541,7 +686,9 @@ export default function App() {
           </div>
           <div style={{ padding: 16 }}>
             <DropZone accept="application/pdf,.pdf" onFiles={handlePdfDrop} label="PDFをドロップ / クリックで選択" />
-            <div style={{ fontSize: 12, color: "#047857", marginTop: 8 }}>{loadingPdf ? "抽出中..." : pdfText ? `${pdfText.slice(0, 80)}...` : ""}</div>
+            <div style={{ fontSize: 12, color: "#047857", marginTop: 8 }}>
+              {loadingPdf ? "抽出中..." : pdfText ? `${pdfText.slice(0, 80)}...` : ""}
+            </div>
           </div>
         </section>
 
@@ -552,15 +699,31 @@ export default function App() {
           <div style={{ padding: 16 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
               {inplaceEdit && (
-                <button onClick={addRow} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #a7f3d0", background: "#fff", color: "#047857", fontWeight: 600 }}>行を追加</button>
+                <button
+                  onClick={addRow}
+                  style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #a7f3d0", background: "#fff", color: "#047857", fontWeight: 600 }}
+                >
+                  行を追加
+                </button>
               )}
-              <button onClick={handleEstimate} style={{ marginLeft: "auto", padding: "6px 10px", borderRadius: 8, background: "#059669", color: "#fff", border: "1px solid #059669", fontWeight: 700 }}>
+              <button
+                onClick={handleEstimate}
+                style={{ marginLeft: "auto", padding: "6px 10px", borderRadius: 8, background: "#059669", color: "#fff", border: "1px solid #059669", fontWeight: 700 }}
+              >
                 {inplaceEdit ? "決定（見積表示）" : rows.length > 0 ? "再編集（見積表示）" : "見積表示"}
               </button>
             </div>
 
             <div style={{ overflow: "auto", border: "1px solid #a7f3d0", borderRadius: 12 }}>
               <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed", fontSize: 14 }}>
+                <colgroup>
+                  <col style={{ width: 60 }} />
+                  <col style={{ width: "40%" }} />
+                  <col style={{ width: "15%" }} />
+                  <col style={{ width: "15%" }} />
+                  <col style={{ width: "20%" }} />
+                  <col style={{ width: 80 }} />
+                </colgroup>
                 <thead style={{ background: "#ecfdf5", color: "#065f46" }}>
                   <tr>
                     {["項目", "型式", "定価", "仕入", "備考", "操作"].map((h, ci) => (
@@ -571,7 +734,14 @@ export default function App() {
                             <button
                               onClick={() => copyColumn(ci)}
                               title={`${h}列をコピー（結合セル向け）`}
-                              style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #a7f3d0", background: "#fff", color: "#047857", fontWeight: 600 }}
+                              style={{
+                                padding: "6px 10px",
+                                borderRadius: 8,
+                                border: "1px solid #a7f3d0",
+                                background: "#fff",
+                                color: "#047857",
+                                fontWeight: 600,
+                              }}
                             >
                               コピー
                             </button>
@@ -584,12 +754,14 @@ export default function App() {
                 <tbody>
                   {rows.length === 0 ? (
                     <tr>
-                      <td colSpan={6} style={{ padding: 24, textAlign: "center", color: "#047857" }}>ここに結果が表示されます</td>
+                      <td colSpan={6} style={{ padding: 24, textAlign: "center", color: "#047857" }}>
+                        ここに結果が表示されます
+                      </td>
                     </tr>
                   ) : (
                     rows.map((r, idx) => (
                       <tr key={r.id} style={{ background: r.found ? "transparent" : "#fff7ed" }}>
-                        <td style={{ border: "1px solid #a7f3d0", padding: "8px 10px", fontSize: 12 }}>{idx + 1}</td>
+                        <td style={{ border: "1px solid #a7f3d0", padding: "8px 10px", fontSize: 12, textAlign: "right" }}>{idx + 1}</td>
                         <td style={{ border: "1px solid #a7f3d0", padding: "8px 10px", whiteSpace: "nowrap" }}>
                           {inplaceEdit ? (
                             <input
@@ -598,7 +770,10 @@ export default function App() {
                               style={{ width: "100%", padding: "6px 8px", border: "1px solid #e5e7eb", borderRadius: 6 }}
                             />
                           ) : (
-                            <span style={{ fontWeight: 600, color: "#064e3b" }}>{r.modelLabel && r.modelLabel !== r.model ? `品名・型式　${r.modelLabel}` : r.model}</span>
+                            <span style={{ fontWeight: 600, color: "#064e3b" }}>
+                              {/* 編集終了後だけ「品名：型式」で表示（labelが空なら型式のみ） */}
+                              {r.modelLabel ? `品名・型式　${r.modelLabel}` : r.model}
+                            </span>
                           )}
                         </td>
                         <td style={{ border: "1px solid #a7f3d0", padding: "8px 10px", fontVariantNumeric: "tabular-nums" }}>
@@ -639,7 +814,19 @@ export default function App() {
                           )}
                         </td>
                         <td style={{ border: "1px solid #a7f3d0", padding: "8px 10px", fontSize: 12 }}>
-                          <button onClick={() => deleteRow(r.id)} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #fecaca", background: "#fff", color: "#b91c1c", fontWeight: 600 }}>削除</button>
+                          <button
+                            onClick={() => deleteRow(r.id)}
+                            style={{
+                              padding: "6px 10px",
+                              borderRadius: 8,
+                              border: "1px solid #fecaca",
+                              background: "#fff",
+                              color: "#b91c1c",
+                              fontWeight: 600,
+                            }}
+                          >
+                            削除
+                          </button>
                         </td>
                       </tr>
                     ))
@@ -649,7 +836,12 @@ export default function App() {
             </div>
 
             {/* 失敗時の手動コピー */}
-            <CopyDialog open={copyUI.open} title={copyUI.title} text={copyUI.text} onClose={() => setCopyUI({ open: false, title: "", text: "" })} />
+            <CopyDialog
+              open={copyUI.open}
+              title={copyUI.title}
+              text={copyUI.text}
+              onClose={() => setCopyUI({ open: false, title: "", text: "" })}
+            />
           </div>
         </section>
 
@@ -679,7 +871,8 @@ export default function App() {
 function _runSmokeTests() {
   try {
     console.assert(normalizeKey("Abc- 123 (50Hz)") === "ABC123", "normalizeKey 失敗");
-    const txt = "ABC-1 ABC-1 DEF-2(注記) ｱｲｳ-1 あいう-1 試験-1 TNHS-100 DSP3000";
+    const txt =
+      "ナットランナー CFT-401RS1-S\nABC-1 ABC-1 DEF-2(注記) ｱｲｳ-1 あいう-1 試験-1 TNHS-100 DSP3000";
     const list = parseModelList(txt);
     const abc1Count = list.filter((x) => x === "ABC-1").length;
     console.assert(abc1Count === 2, "parseModelList 重複保持 失敗");
@@ -689,7 +882,12 @@ function _runSmokeTests() {
     console.assert(!list.includes("試験-1"), "parseModelList 漢字除外 失敗");
     console.assert(!list.includes("DSP3000") && !list.includes("TNHS-100"), "parseModelList ノイズ除外 失敗");
     console.assert(jpYen("1000") === "1,000", "jpYen フォーマット 失敗");
-    console.log("[SMOKE] jpYen:", [jpYen(0), jpYen("12,345"), jpYen("/98,765")]);
+
+    // ラベル生成のざっくり確認
+    console.assert(
+      labelFromPdfText("CFT-401RS1-S", "ナットランナー：CFT-401RS1-S") === "ナットランナー：CFT-401RS1-S",
+      "labelFromPdfText 失敗"
+    );
   } catch (e) {
     console.warn("[SMOKE] failed:", e);
   }
