@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>価格表示ツール（テキストPDF専用 / 縦列コピー対応）</title>
+  <title>価格表示ツール（テキストPDF専用 / 縦列コピー対応 / 品名自動付与）</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     body{margin:0;background:#fff;color:#111;font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial}
@@ -53,7 +53,7 @@
 </head>
 <body>
   <header>
-    <h1>価格表示ツール（テキストPDF専用・縦列コピー対応）</h1>
+    <h1>価格表示ツール（テキストPDF専用・縦列コピー対応・品名自動付与）</h1>
     <div class="sub">背景：白 / 基調：ライトグリーン</div>
   </header>
 
@@ -159,7 +159,7 @@ const normalizeKey = (s) => stripParen(s).toUpperCase().replace(/[-\s]/g,"");
 const jpYen = (n) => { const num = parseFloat(String(n ?? "").replace(/[^0-9.-]/g,"")); if (isNaN(num)) return ""; return new Intl.NumberFormat("ja-JP").format(num); };
 const parseModelList = (txt) => (txt||"").split(/[\n,;\t\s]+/).map(x=>stripParen(x)).map(x=>x.trim()).filter(x=>x && !isNoise(x) && isValidModel(x));
 
-/** 左側に日本語があれば「品名：型式」へ */
+/** PDF行の左側に日本語があれば「品名：型式」へ */
 function labelFromPdfText(model, pdfText){
   const m = stripParen(model||""); if (!m) return "";
   const lines = String(pdfText||"").split(/\r?\n+/);
@@ -173,6 +173,50 @@ function labelFromPdfText(model, pdfText){
     }
   }
   return m;
+}
+
+/** 型式プレフィックス → 品名（長い順に評価） */
+function nameFromModelPrefix(model) {
+  if (!model) return "";
+  const m = String(model).toUpperCase();
+  const table = [
+    ["CFT-SP", "スピンドルユニット"],
+    ["MFC-DP", "表示ユニット"],
+    ["MFC-S",  "ユニット"],
+    ["MFC-W",  "ユニット"],
+    ["HFC",    "ユニット"],
+    ["C30-FW4","センサ&モーターケーブル"],
+    ["C30-L",  "リミットセンサブレーキケーブル"],
+    ["C15-B3", "ブレーキケーブル"],
+    ["C30-P1", "プリアンプケーブル"],
+    ["C30-HW", "STOケーブル"],
+    ["DSP-UC", "UCコンソール"],
+    ["C30-FM", "ツールケーブル"],
+    ["C30-FH", "ツールケーブル"],
+    ["C15-M",  "モーターケーブル"],
+    ["C30-PR", "プリアンプレゾルバケーブル"],
+    ["C30-EL", "リミットセンサブレーキケーブル(延長)"],
+    ["C15-F7", "ツールケーブル"],
+    ["MFC",    "オプションユニット"],
+
+    // ツール系（最後にまとめて）
+    ["DP",  "ツール"],
+    ["CFT", "ツール"],
+    ["MFT", "ツール"],
+    ["NFT", "ツール"],
+    ["HFT", "ツール"],
+  ];
+  for (const [prefix, name] of table) {
+    if (m.startsWith(prefix)) return name;
+  }
+  return "";
+}
+
+/** ラベル構築: 1) プレフィックスマッピング 2) PDF左側日本語 3) 型式のみ */
+function buildLabel(model, pdfText) {
+  const mapped = nameFromModelPrefix(model);
+  if (mapped) return `${mapped}：${model}`;
+  return labelFromPdfText(model, pdfText); // 見つからなければ型式のみを返す
 }
 
 /* ===== Clipboard ===== */
@@ -196,7 +240,7 @@ async function tryWriteClipboard(text){
 
 /* ===== State ===== */
 let CSV_MAP = null;   // Map<key, { model, variantsByType: {SP|NR|HNR: [{listPrice,cost}] } }>
-let PDF_TEXT = "";    // PDF全文（型式→品名抽出に利用）
+let PDF_TEXT = "";    // PDF全文（品名抽出用）
 let ROWS = [];        // [{id, model, modelLabel, listPrice, cost, found, note, ...}]
 let INPLACE = false;
 
@@ -225,6 +269,7 @@ function parseCsvToMap(file){
           if (isNoise(model) || !isValidModel(model)) continue;
           const key = normalizeKey(model);
 
+          // 縦/横判定
           const hasTypeCol = row.length>=4 && String(row[3]||"").trim()!=="";
           const looksWide  = row.length>=6 && (String(row[1]||"")!=="" || String(row[3]||"")!=="" || String(row[5]||"")!=="");
 
@@ -269,6 +314,7 @@ async function extractTextFromPdf(file){
       const chunk = content.items.map(it => (it.str ? it.str : "")).join("\n");
       if (chunk.trim()) collected++;
       text += chunk + "\n";
+      // 先頭数ページで十分なテキストが取れたら軽量終了
       if (i>=3 && collected>0 && text.length>1000) break;
     }
     text = (text||"").trim();
@@ -327,7 +373,7 @@ function renderRows(){
     const rowCls = r.found ? "" : "row-warn";
     const modelCell = INPLACE
       ? `<input data-id="${r.id}" data-k="model" value="${escapeHtml(r.model)}" style="width:100%;padding:6px 8px;border:1px solid #e5e7eb;border-radius:6px" />`
-      : `<span style="font-weight:600;color:#064e3b">${r.modelLabel ? "品名・型式　"+escapeHtml(r.modelLabel) : escapeHtml(r.model)}</span>`;
+      : `<span style="font-weight:600;color:#064e3b">${r.modelLabel ? escapeHtml(r.modelLabel) : escapeHtml(r.model)}</span>`;
     const listCell = INPLACE
       ? `<input data-id="${r.id}" data-k="listPrice" value="${escapeHtml(r.listPrice)}" placeholder="定価" style="width:100%;padding:6px 8px;border:1px solid #e5e7eb;border-radius:6px" />`
       : (r.listPrice ? `<span>${escapeHtml(jpYen(r.listPrice))}</span>` : `<span class="muted">—</span>`);
@@ -367,7 +413,7 @@ function buildRowsFromModels(modelList){
       out.push({
         id: `${key}-${occIdx}-${i}`,
         model: (hit?.model ?? stripParen(m)),
-        modelLabel: "", // 編集終了で付与
+        modelLabel: "", // 見積表示時に付与
         listPrice: v.listPrice, cost: v.cost,
         found: !!hit && picked.arr.length>0,
         note: (!!hit && picked.arr.length>0) ? `一致（${picked.type})` : "未一致",
@@ -453,7 +499,10 @@ document.getElementById("tbody").addEventListener("input", (e)=>{
 // 見積表示（編集終了 → 品名：型式 付与）
 document.getElementById("estimateBtn").addEventListener("click", ()=>{
   if (INPLACE){
-    ROWS = resolvePricesFromCsv(ROWS).map(r => ({ ...r, modelLabel: labelFromPdfText(r.model||"", PDF_TEXT) || r.model }));
+    ROWS = resolvePricesFromCsv(ROWS).map(r => ({
+      ...r,
+      modelLabel: buildLabel(r.model || "", PDF_TEXT)
+    }));
     INPLACE = false; renderRows();
     Toast("編集確定：品名：型式で表示しました");
     document.getElementById("addRowBtn").style.display = "none";
@@ -475,7 +524,9 @@ document.getElementById("grid").addEventListener("click", async (e)=>{
   const ci = Number(col);
   const pick = (r) => {
     if (ci===1){
-      const label = !INPLACE ? (r.modelLabel || labelFromPdfText(r.model||"", PDF_TEXT)) : labelFromPdfText(r.model||"", PDF_TEXT);
+      const label = !INPLACE
+        ? (r.modelLabel || buildLabel(r.model || "", PDF_TEXT))
+        : buildLabel(r.model || "", PDF_TEXT);
       return String(label || r.model || "");
     }
     if (ci===2) return r.listPrice ? jpYen(r.listPrice) : "";
